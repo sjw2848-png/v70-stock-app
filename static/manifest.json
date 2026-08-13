@@ -1,0 +1,14 @@
+{
+  "name": "V70.2 모바일 주식 분석판",
+  "short_name": "V70.2 주식판",
+  "description": "모바일에서 보는 개인용 주식 기술분석 대시보드",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#07101e",
+  "theme_color": "#07101e",
+  "icons": [
+    {"src":"/static/icon-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},
+    {"src":"/static/icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}
+  ]
+}

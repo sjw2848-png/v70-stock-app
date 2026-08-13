@@ -1,0 +1,9 @@
+Flask>=3.0,<4
+pandas>=2.1
+numpy>=1.26
+requests>=2.31
+yfinance>=0.2.40
+finance-datareader>=0.9.96
+lxml>=5.0
+html5lib>=1.1
+gunicorn>=22,<24
