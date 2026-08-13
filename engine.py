@@ -969,11 +969,51 @@ def diagnostic_market():
 
 def _load_price(code, market):
     if market == 'US':
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            df = yf.download(code, period='6mo', interval='1d', progress=False, auto_adjust=False, threads=False)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.droplevel(1)
-        return df
+        # US search must be resilient on cloud hosts. Yahoo can occasionally
+        # return an empty frame / rate-limit Render IPs, so try multiple
+        # canonical ticker forms and then FinanceDataReader as a second source.
+        raw = str(code or '').strip().upper()
+        yf_codes = []
+        for cand in (raw, raw.replace('.', '-'), raw.replace('/', '-')):
+            if cand and cand not in yf_codes:
+                yf_codes.append(cand)
+
+        for ticker in yf_codes:
+            try:
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    df = yf.download(ticker, period='6mo', interval='1d', progress=False, auto_adjust=False, threads=False)
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.droplevel(1)
+                if df is not None and not df.empty and 'Close' in df.columns and df['Close'].dropna().shape[0] >= 20:
+                    return df
+            except Exception:
+                pass
+
+        # FDR can provide many US tickers through its alternate data source.
+        for ticker in (raw, raw.replace('-', '.'), raw.replace('.', '-')):
+            if not ticker:
+                continue
+            try:
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    df = fdr.DataReader(ticker)
+                if df is not None and not df.empty:
+                    df = df.tail(180)
+                    # Normalize common FDR column naming if needed.
+                    rename = {}
+                    for c in df.columns:
+                        lc = str(c).lower()
+                        if lc == 'close': rename[c] = 'Close'
+                        elif lc == 'open': rename[c] = 'Open'
+                        elif lc == 'high': rename[c] = 'High'
+                        elif lc == 'low': rename[c] = 'Low'
+                        elif lc == 'volume': rename[c] = 'Volume'
+                    if rename:
+                        df = df.rename(columns=rename)
+                    if 'Close' in df.columns and df['Close'].dropna().shape[0] >= 20:
+                        return df
+            except Exception:
+                pass
+        return pd.DataFrame()
     # KR / KR_ETF
     try:
         df = fdr.DataReader(code)
@@ -1347,6 +1387,27 @@ def _resolve_search_query(query: str, market_hint: str = 'AUTO'):
         raise ValueError('종목명 또는 종목코드를 입력하세요.')
     hint = str(market_hint or 'AUTO').upper()
     qu = q.upper()
+
+    # Common US company-name aliases for beginner search.
+    us_aliases = {
+        '엔비디아':'NVDA', 'NVIDIA':'NVDA',
+        '애플':'AAPL', 'APPLE':'AAPL',
+        '테슬라':'TSLA', 'TESLA':'TSLA',
+        '마이크로소프트':'MSFT', 'MICROSOFT':'MSFT',
+        '팔란티어':'PLTR', 'PALANTIR':'PLTR',
+        '아마존':'AMZN', 'AMAZON':'AMZN',
+        '알파벳':'GOOGL', '구글':'GOOGL', 'GOOGLE':'GOOGL', 'ALPHABET':'GOOGL',
+        '메타':'META', 'META PLATFORMS':'META',
+        'AMD':'AMD', '브로드컴':'AVGO', 'BROADCOM':'AVGO',
+        '넷플릭스':'NFLX', 'NETFLIX':'NFLX',
+        '코스트코':'COST', 'COSTCO':'COST',
+        '월마트':'WMT', 'WALMART':'WMT',
+        'JP모건':'JPM', 'JPMORGAN':'JPM',
+    }
+    alias_code = us_aliases.get(q) or us_aliases.get(qu)
+    if alias_code:
+        info = dict(US_CURATED.get(alias_code) or {'name': q, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'prob': 70, 'tech': '추세매매'})
+        return alias_code, info, 'US'
 
     # Known curated Korean/US names first.
     for code, info in {**KR_CURATED, **KR_ETFS}.items():
