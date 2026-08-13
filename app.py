@@ -8,14 +8,16 @@ import time
 import webbrowser
 from datetime import datetime, timezone
 from flask import Flask, jsonify, render_template, request
-from engine import analyze
+from engine import analyze, analyze_search, fetch_fundamentals, fetch_recent_issues
 
-APP_VERSION = 'V70.3'
+APP_VERSION = 'V70.9'
 app = Flask(__name__)
 
 _cache_lock = threading.Lock()
 _cache = {}
 _last_request_by_ip = {}
+_fund_cache = {}
+_issue_cache = {}
 CACHE_TTL = max(0, int(os.environ.get('CACHE_TTL_SECONDS', '120')))
 MIN_REQUEST_GAP = max(0.0, float(os.environ.get('MIN_REQUEST_GAP_SECONDS', '2')))
 APP_PIN = os.environ.get('APP_PIN', '').strip()
@@ -80,6 +82,7 @@ def api_analyze():
     defaults = {
         'budget': 5_000_000,
         'trade_budget': 300_000,
+        'long_budget': 1_000_000,
         'risk_pct': 1.0,
         'stop_pct': 3.0,
         'min_rrr': 1.5,
@@ -121,6 +124,86 @@ def api_analyze():
             'generated_at': generated_at,
             'version': APP_VERSION,
         })
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)[:300], 'version': APP_VERSION}), 500
+
+
+@app.post('/api/search')
+def api_search():
+    if not _authorized():
+        return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.', 'code': 'PIN_REQUIRED'}), 401
+
+    payload = request.get_json(silent=True) or {}
+    query = str(payload.pop('query', '')).strip()
+    market_hint = str(payload.pop('market_hint', 'AUTO')).strip().upper()
+    if not query:
+        return jsonify({'ok': False, 'error': '종목명 또는 종목코드를 입력하세요.'}), 400
+
+    defaults = {
+        'budget': 5_000_000,
+        'trade_budget': 300_000,
+        'long_budget': 1_000_000,
+        'risk_pct': 1.0,
+        'stop_pct': 3.0,
+        'min_rrr': 1.5,
+        'trust_mode': 'balanced',
+        'mode': 'curated',
+        'top_n': 60,
+        'held': '',
+    }
+    settings = {**defaults, **payload}
+    try:
+        data = analyze_search(query, settings, market_hint=market_hint)
+        return jsonify({'ok': True, **data, 'generated_at': _now_iso(), 'version': APP_VERSION})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)[:300], 'version': APP_VERSION}), 500
+
+
+
+@app.post('/api/fundamentals')
+def api_fundamentals():
+    if not _authorized():
+        return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.', 'code': 'PIN_REQUIRED'}), 401
+    payload = request.get_json(silent=True) or {}
+    code = str(payload.get('code', '')).strip().upper()
+    market = str(payload.get('market', 'KR')).strip().upper()
+    if not code:
+        return jsonify({'ok': False, 'error': '종목코드가 없습니다.'}), 400
+    key = f'{market}:{code}'
+    now = time.time()
+    cached = _fund_cache.get(key)
+    if cached and now - cached['ts'] < 1800:
+        return jsonify({'ok': True, 'data': cached['data'], 'cache_hit': True, 'version': APP_VERSION})
+    try:
+        data = fetch_fundamentals(code, market)
+        _fund_cache[key] = {'ts': now, 'data': data}
+        if len(_fund_cache) > 60:
+            oldest = sorted(_fund_cache.items(), key=lambda kv: kv[1]['ts'])[:10]
+            for k, _ in oldest:
+                _fund_cache.pop(k, None)
+        return jsonify({'ok': True, 'data': data, 'cache_hit': False, 'version': APP_VERSION})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)[:300], 'version': APP_VERSION}), 500
+
+
+@app.post('/api/issues')
+def api_issues():
+    if not _authorized():
+        return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.', 'code': 'PIN_REQUIRED'}), 401
+    payload = request.get_json(silent=True) or {}
+    code = str(payload.get('code', '')).strip().upper()
+    market = str(payload.get('market', 'KR')).strip().upper()
+    if not code:
+        return jsonify({'ok': False, 'error': '종목코드가 없습니다.'}), 400
+    key = f'{market}:{code}'
+    now = time.time()
+    cached = _issue_cache.get(key)
+    if cached and now - cached['ts'] < 900:
+        return jsonify({'ok': True, 'data': cached['data'], 'cache_hit': True, 'version': APP_VERSION})
+    try:
+        data = fetch_recent_issues(code, market)
+        _issue_cache[key] = {'ts': now, 'data': data}
+        return jsonify({'ok': True, 'data': data, 'cache_hit': False, 'version': APP_VERSION})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)[:300], 'version': APP_VERSION}), 500
 

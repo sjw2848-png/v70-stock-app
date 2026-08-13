@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#07101e" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="V70.3 주식판" />
-  <title>V70.3 오늘 사도 돼?</title>
+  <meta name="apple-mobile-web-app-title" content="V70.9 주식판" />
+  <title>V70.9 오늘 사도 돼?</title>
   <link rel="manifest" href="/static/manifest.json" />
   <link rel="icon" href="/static/icon-192.png" />
   <link rel="apple-touch-icon" href="/static/icon-192.png" />
@@ -16,7 +16,7 @@
 <body>
   <header class="topbar">
     <div class="brand-wrap">
-      <div class="eyebrow">V70.3 · 진짜 주린이판</div>
+      <div class="eyebrow">V70.9 · 예산·가격지도 고도화판</div>
       <h1>오늘 사도 돼?</h1>
       <p id="connectionText">열자마자 YES · WAIT · NO만 먼저 확인</p>
     </div>
@@ -36,6 +36,33 @@
       <div class="answer-mini" id="answerMini"></div>
     </section>
 
+    <section class="quick-money card" id="moneySection">
+      <div class="section-title-row"><div><b>💰 내 투자금 설정</b><span>금액을 바꾸면 추천 수량과 최대 손실액이 다시 계산됩니다</span></div></div>
+      <div class="quick-money-grid">
+        <label>전체 투자금<input id="budget" inputmode="numeric" type="number" value="5000000" step="100000" /></label>
+        <label>한 종목에 쓸 금액<input id="tradeBudget" inputmode="numeric" type="number" value="300000" step="50000" /></label>
+        <label>장기투자 예산<input id="longBudget" inputmode="numeric" type="number" value="1000000" step="100000" /></label>
+        <label>1회 허용손실 %<input id="riskPct" inputmode="decimal" type="number" value="1" step="0.1" /></label>
+      </div>
+      <div class="money-presets" aria-label="1회 매수금액 빠른선택">
+        <span>빠른 선택</span>
+        <button type="button" data-trade="100000">10만원</button><button type="button" data-trade="300000">30만원</button><button type="button" data-trade="500000">50만원</button><button type="button" data-trade="1000000">100만원</button>
+      </div>
+      <div class="money-note" id="moneyNote">현재 설정: 전체 5,000,000원 · 종목당 300,000원 · 최대 허용손실 50,000원</div>
+    </section>
+
+    <section class="live-search card" id="liveSearchSection">
+      <div class="section-title-row"><div><b>🔎 실시간 종목 검색</b><span>추천목록에 없는 종목도 바로 분석합니다</span></div></div>
+      <div class="live-search-row">
+        <input id="liveSearchInput" type="search" placeholder="예: 삼성전자, 005930, 알테오젠, NVDA" />
+        <select id="liveSearchMarket" aria-label="검색 시장"><option value="AUTO">자동판별</option><option value="KR">국내</option><option value="US">미국</option></select>
+        <button id="liveSearchBtn" class="primary" type="button">이 종목 분석</button>
+      </div>
+      <div class="search-hint">검색 결과에도 <b>지금 매수 후보 / 기다리기 / 사지 말기</b>와 사볼 가격·목표·손절·추천 수량이 표시됩니다.</div>
+      <div id="liveSearchStatus" class="status compact"></div>
+      <div id="liveSearchResult" class="single-result"></div>
+    </section>
+
     <section class="verdict-card card" id="topPick" hidden>
       <div class="verdict-label">🏆 오늘의 매수 1순위</div>
       <div id="topPickAction" class="verdict-action">-</div>
@@ -48,6 +75,7 @@
         <div><span>여기 깨지면 손절</span><strong id="topPickStop">-</strong></div>
         <div><span>추천 수량</span><strong id="topPickQty">-</strong></div>
       </div>
+      <div class="timing-box top-timing"><div><span>🕒 추천 매수시간</span><strong id="topPickBuyTime">-</strong></div><div><span>📤 매도 원칙</span><strong id="topPickSellPlan">-</strong></div></div>
       <div class="verdict-warning">※ “매수 후보”는 수익 보장이 아니라 현재 데이터가 설정 기준을 통과했다는 뜻입니다.</div>
     </section>
 
@@ -78,13 +106,42 @@
       <div class="metric important"><span>🟢 매수 후보</span><strong id="recommended">-</strong></div>
       <div class="metric"><span>S급</span><strong id="sCount">-</strong></div>
       <div class="metric"><span>A급</span><strong id="aCount">-</strong></div>
+      <div class="metric"><span>💎 장기 우량</span><strong id="longQualityCount">-</strong></div>
       <div class="metric"><span>분석 종목</span><strong id="totalCount">-</strong></div>
+    </section>
+
+
+    <section class="budget-top card" id="budgetTopSection">
+      <div class="section-title-row"><div><b>💰 내 예산 최적 단타 TOP 10</b><span>종목당 매수금액·허용손실·손익비를 함께 반영한 실행 후보</span></div></div>
+      <div id="budgetTopEmpty" class="quality-empty">분석 후 내 예산에 맞는 후보를 표시합니다.</div>
+      <div class="budget-table-wrap"><table class="budget-table" id="budgetTopTable" hidden><thead><tr><th>순위</th><th>종목</th><th>판정</th><th>전략</th><th>진입가</th><th>수량/총액</th><th>1차 기대수익</th><th>1차 제한손실</th><th>추천시간</th></tr></thead><tbody id="budgetTopBody"></tbody></table></div>
+      <div id="budgetTopMobile" class="budget-mobile"></div>
+      <p class="quality-note">※ 기대수익·제한손실은 설정값과 기술적 목표/손절 기준의 계산값이며 실제 체결·수익을 보장하지 않습니다.</p>
+    </section>
+
+    <section class="quality-section card" id="qualitySection">
+      <div class="section-title-row"><div><b>💎 장기 우량주 후보</b><span>단기 거래량·뉴스와 분리해 중장기 추세·유동성·변동성을 통과한 종목만 표시</span></div></div>
+      <div id="qualityEmpty" class="quality-empty">분석 후 장기 우량 후보를 표시합니다.</div>
+      <div id="qualityCards" class="quality-cards"></div>
+      <p class="quality-note">※ 여기의 ‘우량 후보’는 차트·유동성 1차 선별입니다. 과거 신호·뉴스·실적은 보조 참고이며, 종목 카드에서 실적을 불러와 ‘💎 실적확인 우량’ 여부를 추가 확인하세요.</p>
+    </section>
+
+
+    <section class="sector-section card" id="sectorSection">
+      <div class="section-title-row"><div><b>🔥 오늘 강한 섹터 · 테마</b><span>모멘텀·5일수익률·RVOL·20일선 상단 종목 비율을 함께 비교</span></div></div>
+      <div id="sectorTop" class="sector-top"><div class="quality-empty">분석 후 강한 섹터를 표시합니다.</div></div>
+      <div class="sector-subgrid">
+        <div><b>💎 섹터별 장기 우량</b><div id="sectorLong" class="sector-mini-list">-</div></div>
+        <div><b>🧺 내 보유주 섹터 비중</b><div id="sectorHoldings" class="sector-mini-list">보유주 입력 시 표시</div><div id="sectorWarnings" class="sector-warnings"></div></div>
+      </div>
+      <p class="quality-note" id="sectorNote">※ ‘대장 후보’는 현재 분석군 안에서만 비교한 상대 순위입니다.</p>
     </section>
 
     <section class="toolbar card" id="resultsSection">
       <div class="section-title-row"><div><b>후보 종목</b><span>좋은 순서대로 먼저 보여줍니다</span></div><button id="toggleAllBtn" class="ghost small" type="button">전체 보기</button></div>
       <div class="search-sort-row">
         <input id="search" type="search" placeholder="종목명·코드 검색" />
+        <select id="sectorFilter" aria-label="섹터"><option value="ALL">전체 섹터</option></select>
         <select id="sortBy" aria-label="정렬">
           <option value="default">추천순</option>
           <option value="momentum">모멘텀순</option>
@@ -99,6 +156,7 @@
         <button class="chip" data-filter="US">미국</button>
         <button class="chip" data-filter="ETF">ETF</button>
         <button class="chip" data-filter="HELD">보유</button>
+        <button class="chip" data-filter="LONG">💎 장기 우량</button>
       </div>
     </section>
 
@@ -109,16 +167,13 @@
       <details>
         <summary>⚙️ 고급 설정 <span>평소에는 안 열어도 됩니다</span></summary>
         <div class="form-grid">
-          <label>전체 자본금<input id="budget" inputmode="numeric" type="number" value="5000000" step="100000" /></label>
-          <label>1회 매매 예산<input id="tradeBudget" inputmode="numeric" type="number" value="300000" step="50000" /></label>
-          <label>1회 허용손실 %<input id="riskPct" inputmode="decimal" type="number" value="1" step="0.1" /></label>
           <label>기본 손절 %<input id="stopPct" inputmode="decimal" type="number" value="3" step="0.1" /></label>
           <label>최소 손익비<input id="minRrr" inputmode="decimal" type="number" value="1.5" step="0.1" /></label>
           <label>분석 강도<select id="trustMode"><option value="conservative">보수적</option><option value="balanced" selected>균형</option><option value="aggressive">적극적</option></select></label>
           <label>분석 종목<select id="mode"><option value="curated" selected>기본 추천군</option><option value="popular">네이버 인기종목</option><option value="top">KRX 시총 상위</option><option value="mixed">종합 분석</option></select></label>
           <label>시총 상위 N<input id="topN" inputmode="numeric" type="number" value="60" min="10" max="150" step="10" /></label>
         </div>
-        <label class="wide">보유종목 · 평단가<input id="held" type="text" placeholder="예: 삼성전자:75000, SK하이닉스:180000" /></label>
+        <label class="wide">보유종목 · 평단가 · 수량<input id="held" type="text" placeholder="예: 삼성전자:75000:20, NVDA:120:5" /></label>
         <label class="wide pin-row">접속 PIN <span class="optional">서버에서 PIN을 설정한 경우만</span><input id="appPin" type="password" autocomplete="current-password" placeholder="설정하지 않았다면 비워두기" /></label>
         <div class="setting-actions"><button id="clearSavedBtn" class="ghost" type="button">저장된 결과 지우기</button></div>
         <p class="hint">‘가정 승률’과 규칙점수는 미래 수익을 보장하는 확률이 아닙니다.</p>
@@ -132,15 +187,33 @@
 
   <template id="stockTemplate">
     <article class="stock-card">
-      <div class="stock-head"><div><div class="name-row"><h3 class="name"></h3><span class="grade"></span></div><div class="meta"></div></div><div class="decision"></div></div>
-      <div class="beginner-action"></div><div class="beginner-why"></div>
+      <div class="stock-head"><div><div class="name-row"><h3 class="name"></h3><span class="grade"></span><span class="quality-badge" hidden></span></div><div class="meta"></div><div class="theme-line"><span class="sector-role"></span><span class="theme-tags"></span></div></div><div class="decision"></div></div>
+      <div class="beginner-action"></div><div class="risk-flags" hidden></div><div class="beginner-why"></div>
+      <div class="judge-six">
+        <div><span>💵 예산</span><strong class="j-budget"></strong></div><div><span>⚖️ 손익비</span><strong class="j-rrr"></strong></div><div><span>🚀 모멘텀</span><strong class="j-mom"></strong></div><div><span>🔥 거래량</span><strong class="j-vol"></strong></div><div><span>📈 추세</span><strong class="j-trend"></strong></div><div><span>🧠 전략일치</span><strong class="j-conf"></strong></div>
+      </div>
       <div class="price-row"><div><span>현재가</span><strong class="price"></strong></div><div><span>사볼 가격</span><strong class="entry"></strong></div><div><span>1차 목표</span><strong class="target"></strong></div><div><span>손절</span><strong class="stop"></strong></div></div>
       <div class="signal-row"><span class="signal momentum"></span><span class="signal rrr"></span><span class="signal tech"></span><span class="signal qty"></span></div>
       <div class="pnl-row"><span class="profit"></span><span class="loss"></span></div>
+      <div class="trade-clock"><div><span>🕒 구매시간</span><strong class="buy-time"></strong><small class="buy-rule"></small></div><div><span>📤 매도시점</span><strong class="sell-plan"></strong><small class="time-stop"></small></div></div>
+      <div class="split-plan"><div><span>🧩 분할매수</span><strong class="split-buy"></strong></div><div><span>💰 분할매도</span><strong class="split-sell"></strong></div></div>
+      <div class="price-map">
+        <div class="price-map-title">🗺️ 가격 지도 <small>지지·중심·저항 + 3단계 목표/손절</small></div>
+        <div class="pivot-row"><div><span>지지 S1</span><strong class="pm-s1"></strong></div><div><span>중심 PP</span><strong class="pm-pp"></strong></div><div><span>저항 R1</span><strong class="pm-r1"></strong></div></div>
+        <div class="levels-row target-levels"><div><span>목표 1</span><strong class="pm-t1"></strong></div><div><span>목표 2</span><strong class="pm-t2"></strong></div><div><span>목표 3</span><strong class="pm-t3"></strong></div></div>
+        <div class="levels-row stop-levels"><div><span>손절 1</span><strong class="pm-x1"></strong></div><div><span>손절 2</span><strong class="pm-x2"></strong></div><div><span>손절 3</span><strong class="pm-x3"></strong></div></div>
+      </div>
+      <div class="volume-strip"><div><span>오늘 거래량</span><strong class="volume"></strong></div><div><span>20일 평균</span><strong class="avg-volume"></strong></div><div><span>RVOL</span><strong class="rvol-quick"></strong></div><div><span>거래대금</span><strong class="trading-value"></strong></div></div>
+      <div class="attention-box"><div><b class="attention-label">⚪ 관심 보통</b><span class="attention-score"></span></div><div class="attention-reasons"></div></div>
+      <div class="flow-backtest"><div><span>💧 수급 프록시</span><strong class="flow-label"></strong><small class="flow-reason"></small></div><div><span>🧪 과거 유사신호</span><strong class="backtest-label"></strong><small class="backtest-detail"></small></div></div>
+      <div class="outlook-box"><div><span>🔭 1~3개월 전망</span><strong class="outlook-label"></strong><small class="outlook-summary"></small></div><div><span>🌳 장기투자</span><strong class="long-action"></strong><small class="long-plan"></small></div></div>
+      <div class="held-box" hidden><b class="held-action"></b><span class="held-pnl"></span><small class="held-reason"></small><div class="loss-recovery"><strong>🛟 손실 대응</strong><div class="loss-stage"></div><div class="recovery-steps"></div><small class="avg-recovery"></small></div></div>
+      <div class="issues-box"><div class="fund-head"><b>📰 최근 이슈 · 뉴스</b><button type="button" class="issue-btn">이슈 불러오기</button></div><div class="issue-body">버튼을 누르면 이 종목의 최근 공개 뉴스 제목을 조회합니다.</div></div>
+      <div class="fundamentals-box"><div class="fund-head"><b>📊 실적 · 기업정보</b><button type="button" class="fund-btn">실적 불러오기</button></div><div class="fund-body">버튼을 누르면 이 종목만 실적을 조회합니다.</div></div>
       <details class="detail"><summary>숫자·지표 상세보기</summary><div class="detail-grid"></div><div class="reason"></div><div class="links"></div></details>
     </article>
   </template>
-  <script>window.V703_CONFIG = { pinRequired: {{ 'true' if pin_required else 'false' }}, version: {{ version|tojson }} };</script>
+  <script>window.V709_CONFIG = { pinRequired: {{ 'true' if pin_required else 'false' }}, version: {{ version|tojson }} };</script>
   <script src="/static/app.js"></script>
 </body>
 </html>
