@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 {
   "name": "V70.9 예산·가격지도 종합투자판",
   "short_name": "V70.9 주식판",
@@ -18,3 +19,6 @@
     }
   ]
 }
+=======
+{"name":"V70.3 오늘 사도 돼?","short_name":"V70.3 주식판","start_url":"/","display":"standalone","background_color":"#07101e","theme_color":"#07101e","icons":[{"src":"/static/icon-192.png","sizes":"192x192","type":"image/png"},{"src":"/static/icon-512.png","sizes":"512x512","type":"image/png"}]}
+>>>>>>> origin/main
