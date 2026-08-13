@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#07101e" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="V70.9 주식판" />
-  <title>V70.9 오늘 사도 돼?</title>
+  <meta name="apple-mobile-web-app-title" content="V70.10 주식판" />
+  <title>V70.10 오늘 사도 돼?</title>
   <link rel="manifest" href="/static/manifest.json" />
   <link rel="icon" href="/static/icon-192.png" />
   <link rel="apple-touch-icon" href="/static/icon-192.png" />
@@ -16,7 +16,7 @@
 <body>
   <header class="topbar">
     <div class="brand-wrap">
-      <div class="eyebrow">V70.9 · 예산·가격지도 고도화판</div>
+      <div class="eyebrow">V70.10 · 보유주 즉시판단판</div>
       <h1>오늘 사도 돼?</h1>
       <p id="connectionText">열자마자 YES · WAIT · NO만 먼저 확인</p>
     </div>
@@ -54,11 +54,16 @@
     <section class="live-search card" id="liveSearchSection">
       <div class="section-title-row"><div><b>🔎 실시간 종목 검색</b><span>추천목록에 없는 종목도 바로 분석합니다</span></div></div>
       <div class="live-search-row">
-        <input id="liveSearchInput" type="search" placeholder="예: 삼성전자, 005930, 알테오젠, NVDA" />
+        <input id="liveSearchInput" type="search" placeholder="예: 삼성전자, 005930, NVDA" />
         <select id="liveSearchMarket" aria-label="검색 시장"><option value="AUTO">자동판별</option><option value="KR">국내</option><option value="US">미국</option></select>
         <button id="liveSearchBtn" class="primary" type="button">이 종목 분석</button>
       </div>
-      <div class="search-hint">검색 결과에도 <b>지금 매수 후보 / 기다리기 / 사지 말기</b>와 사볼 가격·목표·손절·추천 수량이 표시됩니다.</div>
+      <div class="live-holding-row">
+        <label><span>내 평단가 <small id="avgPriceUnit">국내 원 / 미국 $</small></span><input id="liveSearchAvgPrice" type="number" min="0" step="any" inputmode="decimal" placeholder="선택 입력" /></label>
+        <label><span>보유수량</span><input id="liveSearchHeldQty" type="number" min="0" step="1" inputmode="numeric" placeholder="선택 입력" /></label>
+        <button id="clearHoldingSearch" type="button" class="secondary">평단·수량 지우기</button>
+      </div>
+      <div class="search-hint">평단과 수량을 넣으면 검색 결과에서 <b>추가매수 / 보유 / 일부매도 / 비중축소</b>, 현재 손익, 평단 회복 필요 상승률, 손실 대응까지 같이 판단합니다. 미국주는 평단을 <b>달러($)</b>로 입력하세요.</div>
       <div id="liveSearchStatus" class="status compact"></div>
       <div id="liveSearchResult" class="single-result"></div>
     </section>

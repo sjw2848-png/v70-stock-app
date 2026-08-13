@@ -1458,8 +1458,22 @@ def analyze_search(query: str, settings: Dict[str, Any], market_hint: str = 'AUT
     started = time.time()
     code, info, market = _resolve_search_query(query, market_hint)
     fx = get_usdkrw_rate()
+
+    # Optional holding inputs from the live-search form.
+    # KR average price is entered in KRW; US average price is entered in native USD.
+    search_avg_price = _safe_float(settings.get('search_avg_price'), 0)
+    search_held_qty = int(max(_safe_float(settings.get('search_held_qty'), 0), 0))
+    if search_avg_price > 0:
+        info = dict(info)
+        info['my_price'] = search_avg_price * fx if market == 'US' else search_avg_price
+        info['held_qty'] = search_held_qty
+        info['holding_input_currency'] = 'USD' if market == 'US' else 'KRW'
+
     market_info = diagnostic_market()
     item = analyze_one(code, info, market, settings, fx, market_info['state'])
+    if item.get('ok') and search_avg_price > 0:
+        item['holding_input_price_native'] = round(search_avg_price, 4)
+        item['holding_input_currency'] = 'USD' if market == 'US' else 'KRW'
     if not item.get('ok'):
         raise ValueError(item.get('error') or '종목 데이터 분석에 실패했습니다.')
     return {

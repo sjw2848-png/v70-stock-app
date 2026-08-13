@@ -1,6 +1,6 @@
 {
-  "name": "V70.9 예산·가격지도 종합투자판",
-  "short_name": "V70.9 주식판",
+  "name": "V70.10 보유주 즉시판단 종합투자판",
+  "short_name": "V70.10 주식판",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#07101e",
