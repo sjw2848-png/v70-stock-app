@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from flask import Flask, jsonify, render_template, request
 from engine import analyze
 
-APP_VERSION = 'V70.2'
+APP_VERSION = 'V70.3'
 app = Flask(__name__)
 
 _cache_lock = threading.Lock()
