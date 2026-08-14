@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#07101e" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="V70.13.1 주식판" />
-  <title>V70.13.1 스마트 종목선별판</title>
+  <meta name="apple-mobile-web-app-title" content="V70.14 주식판" />
+  <title>V70.14 실전 검증 종목선별판</title>
   <link rel="manifest" href="/static/manifest.json" />
   <link rel="icon" href="/static/icon-192.png" />
   <link rel="apple-touch-icon" href="/static/icon-192.png" />
@@ -16,7 +16,7 @@
 <body>
   <header class="topbar">
     <div class="brand-wrap">
-      <div class="eyebrow">V70.13.1 · 빠른 스마트 섹터·단타 선별판</div>
+      <div class="eyebrow">V70.14 · 실전 검증·순위추적판</div>
       <h1>오늘 사도 돼?</h1>
       <p id="connectionText">열자마자 YES · WAIT · NO만 먼저 확인</p>
     </div>
@@ -34,6 +34,14 @@
       <h2 id="answerTitle">분석을 준비 중입니다</h2>
       <p id="answerText">최신 데이터를 불러오면 바로 결론을 보여드립니다.</p>
       <div class="answer-mini" id="answerMini"></div>
+    </section>
+
+    <section class="final-action card" id="finalActionSection">
+      <div class="section-title-row"><div><b>🎯 오늘의 최종 행동판</b><span>종목이 많아도 이 4칸부터 보고 선택하세요</span></div></div>
+      <div id="finalActionGrid" class="final-action-grid">
+        <div class="final-action-placeholder">분석 후 개별주·단타·ETF·진입임박 1순위를 표시합니다.</div>
+      </div>
+      <div id="finalActionRisk" class="final-action-risk">수량은 종목당 예산과 1회 허용손실 중 더 보수적인 기준으로 자동 제한합니다.</div>
     </section>
 
     <section class="quick-money card" id="moneySection">
@@ -81,6 +89,7 @@
         <div><span>추천 수량</span><strong id="topPickQty">-</strong></div>
       </div>
       <div class="timing-box top-timing"><div><span>🕒 추천 매수시간</span><strong id="topPickBuyTime">-</strong></div><div><span>📤 매도 원칙</span><strong id="topPickSellPlan">-</strong></div></div>
+      <div class="top-risk-note" id="topPickRiskNote">위험기반 수량 계산 대기</div>
       <div class="verdict-warning">※ “매수 후보”는 수익 보장이 아니라 현재 데이터가 설정 기준을 통과했다는 뜻입니다.</div>
     </section>
 
@@ -145,6 +154,13 @@
       <p class="quality-note">※ 초록색 ‘매수 후보’와 노란색 ‘진입대기’를 구분해서 보세요. 기대수익·제한손실은 계산값이며 실제 수익을 보장하지 않습니다.</p>
     </section>
 
+    <section class="performance-section card" id="performanceSection">
+      <div class="section-title-row"><div><b>🧪 추천 사후 성적표</b><span>추천 당시 가격을 저장하고 이후 앱을 열 때 D+1·D+3·D+5 성과를 관찰 기록합니다</span></div></div>
+      <div id="performanceSummary" class="performance-summary">아직 누적된 추천 기록이 없습니다.</div>
+      <div id="performanceCards" class="performance-cards"></div>
+      <p class="quality-note">※ 미래 승률 예측이 아닙니다. 이 기기에서 실제로 저장된 추천의 사후 관찰값이며, 장중 최고·최저를 연속 추적하지 않습니다.</p>
+    </section>
+
     <section class="quality-section card" id="qualitySection">
       <div class="section-title-row"><div><b>💎 장기 우량주 후보</b><span>단기 거래량·뉴스와 분리해 중장기 추세·유동성·변동성을 통과한 종목만 표시</span></div></div>
       <div id="qualityEmpty" class="quality-empty">분석 후 장기 우량 후보를 표시합니다.</div>
@@ -203,7 +219,7 @@
         </div>
         <label class="wide">보유종목 · 평단가 · 수량<input id="held" type="text" placeholder="예: 삼성전자:75000:20, NVDA:120:5" /></label>
         <label class="wide pin-row">접속 PIN <span class="optional">서버에서 PIN을 설정한 경우만</span><input id="appPin" type="password" autocomplete="current-password" placeholder="설정하지 않았다면 비워두기" /></label>
-        <div class="setting-actions"><button id="clearSavedBtn" class="ghost" type="button">저장된 결과 지우기</button></div>
+        <div class="setting-actions"><button id="clearHistoryBtn" class="ghost" type="button">추천 성적표 기록 지우기</button><button id="clearSavedBtn" class="ghost" type="button">저장된 결과 지우기</button></div>
         <p class="hint">‘수익기회 점수’는 종목 간 상대 비교용입니다. 균형/적극 모드에서는 정규 등급 미달이어도 손익비·모멘텀이 좋으면 작은 수량의 기회형 후보로 표시할 수 있습니다.</p>
       </details>
     </section>
@@ -223,6 +239,7 @@
       <div class="price-row"><div><span>현재가</span><strong class="price"></strong></div><div><span>사볼 가격</span><strong class="entry"></strong></div><div><span>1차 목표</span><strong class="target"></strong></div><div><span>손절</span><strong class="stop"></strong></div></div>
       <div class="signal-row"><span class="signal momentum"></span><span class="signal rrr"></span><span class="signal tech"></span><span class="signal qty"></span></div>
       <div class="pnl-row"><span class="profit"></span><span class="loss"></span></div>
+      <div class="risk-sizing"><span>🧮 위험기반 수량</span><strong class="risk-size-main"></strong><small class="risk-size-detail"></small></div>
       <div class="trade-clock"><div><span>🕒 구매시간</span><strong class="buy-time"></strong><small class="buy-rule"></small></div><div><span>📤 매도시점</span><strong class="sell-plan"></strong><small class="time-stop"></small></div></div>
       <div class="split-plan"><div><span>🧩 분할매수</span><strong class="split-buy"></strong></div><div><span>💰 분할매도</span><strong class="split-sell"></strong></div></div>
       <div class="price-map">

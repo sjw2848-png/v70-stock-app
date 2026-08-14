@@ -16,7 +16,7 @@ import yfinance as yf
 import FinanceDataReader as fdr
 
 # ---------------------------------------------------------------------
-# V70.13.1 FAST-LOAD SMART-SECTOR + SPLIT ETF + HIGH-RISK SCALP WEB ENGINE
+# V70.14 PRACTICAL VALIDATION + RANK TREND + RISK SIZING WEB ENGINE
 # - V69 core ideas retained
 # - no fake after-hours data
 # - US technical comparisons stay in native USD
@@ -406,6 +406,8 @@ def build_scalp_candidates(results, settings, limit=2):
             'score':round(score,1),'risk_level':risk_level,'risk_reasons':reasons[:4],
             'entry_krw':_safe_int(entry),'target_krw':target,'stop_krw':stop,'qty':qty,
             'target_pct':round(target_pct,1),'stop_pct':round(stop_pct,1),
+            'max_loss_krw':_safe_int(scalp_loss_cap),'planned_risk_krw':_safe_int(qty*risk_share),
+            'risk_per_share_krw':_safe_int(risk_share),'sizing_limiter':'단타 전용 소액+손실 제한',
             'buy_time':x.get('buy_time'),'trigger':trigger,'tech':x.get('tech'),
             'rvol':x.get('rvol'),'momentum':x.get('momentum'),'opportunity_score':x.get('opportunity_score'),
             'note':'고위험 단타 관찰 후보입니다. 일봉/거래량 기반 선별이라 장중 호가·체결강도 확인 없이 즉시 매수하면 안 됩니다.'
@@ -1355,6 +1357,12 @@ def analyze_one(code, info, market, settings, fx, market_state):
         qty_budget = int(trade_budget // entry_krw) if entry_krw > 0 else 0
         qty_risk = int(max_loss // risk_per_share_krw) if risk_per_share_krw > 0 else 0
         qty_capacity = min(qty_budget, qty_risk)
+        if qty_budget < qty_risk:
+            sizing_limiter = '종목당 예산 제한'
+        elif qty_risk < qty_budget:
+            sizing_limiter = '1회 허용손실 제한'
+        else:
+            sizing_limiter = '예산·허용손실 동시 제한'
         strict_qty = qty_capacity if grade != 'C' and kelly > 0 else 0
         qty = strict_qty
 
@@ -1432,6 +1440,8 @@ def analyze_one(code, info, market, settings, fx, market_state):
         invested = qty * entry_krw
         expected_profit = qty * (target1 - entry) * krw_mult
         expected_loss = qty * (stop1 - entry) * krw_mult
+        planned_risk_krw = qty * risk_per_share_krw
+        risk_budget_used_pct = (planned_risk_krw / max_loss * 100) if max_loss > 0 else 0.0
         held_action = build_held_action(
             held_price, held_qty, close_krw, momentum, rsi, grade,
             _safe_int(ma.get('ma20', 0) * krw_mult), _safe_int(stop1 * krw_mult), qty,
@@ -1498,6 +1508,13 @@ def analyze_one(code, info, market, settings, fx, market_state):
             'opportunity_eligible': opportunity_eligible,
             'opportunity_rrr_floor': round(opp_rrr_floor, 2),
             'qty_capacity': qty_capacity,
+            'qty_budget_limit': qty_budget,
+            'qty_risk_limit': qty_risk,
+            'risk_per_share_krw': _safe_int(risk_per_share_krw),
+            'max_loss_krw': _safe_int(max_loss),
+            'planned_risk_krw': _safe_int(planned_risk_krw),
+            'risk_budget_used_pct': round(risk_budget_used_pct, 1),
+            'sizing_limiter': sizing_limiter,
             'attention_score': attention_score,
             'attention_label': attention_label,
             'attention_reasons': attention_reasons,
