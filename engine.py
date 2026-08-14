@@ -16,7 +16,7 @@ import yfinance as yf
 import FinanceDataReader as fdr
 
 # ---------------------------------------------------------------------
-# V70.11 OPPORTUNITY-RANK WEB ENGINE
+# V70.12 BUY-FOCUS OPPORTUNITY-RANK WEB ENGINE
 # - V69 core ideas retained
 # - no fake after-hours data
 # - US technical comparisons stay in native USD

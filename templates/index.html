@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#07101e" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="V70.11 주식판" />
-  <title>V70.11 수익기회 순위판</title>
+  <meta name="apple-mobile-web-app-title" content="V70.12 주식판" />
+  <title>V70.12 매수후보 강조판</title>
   <link rel="manifest" href="/static/manifest.json" />
   <link rel="icon" href="/static/icon-192.png" />
   <link rel="apple-touch-icon" href="/static/icon-192.png" />
@@ -16,7 +16,7 @@
 <body>
   <header class="topbar">
     <div class="brand-wrap">
-      <div class="eyebrow">V70.11 · 수익기회 순위판</div>
+      <div class="eyebrow">V70.12 · 매수후보 강조판</div>
       <h1>오늘 사도 돼?</h1>
       <p id="connectionText">열자마자 YES · WAIT · NO만 먼저 확인</p>
     </div>
@@ -87,8 +87,8 @@
     <section class="no-buy-card card" id="noBuyCard" hidden>
       <div class="no-buy-icon">🛑</div>
       <div>
-        <div class="no-buy-title">오늘은 억지로 살 종목이 없습니다</div>
-        <p id="noBuyReason">기준을 통과한 매수 후보가 0개입니다. 현금 보유도 전략입니다.</p>
+        <div class="no-buy-title">지금 즉시 매수 후보는 없습니다</div>
+        <p id="noBuyReason">즉시 매수 기준 통과 종목은 0개입니다. 아래의 진입대기·관심후보를 확인하세요.</p>
       </div>
     </section>
 
@@ -116,12 +116,19 @@
     </section>
 
 
+    <section class="buy-focus card" id="buyFocusSection">
+      <div class="section-title-row"><div><b>🔥 지금 볼 매수 후보</b><span>실제 매수 기준을 통과한 종목을 가장 크게 먼저 표시합니다</span></div></div>
+      <div id="buyFocusHeadline" class="buy-focus-headline">분석 후 가장 먼저 볼 종목을 표시합니다.</div>
+      <div id="buyFocusCards" class="buy-focus-cards"></div>
+      <p class="buy-focus-note">※ 초록색은 현재 설정에서 매수 기준 통과, 노란색은 아직 ‘관심/진입대기’입니다. 관심후보를 매수 후보로 오해하지 마세요.</p>
+    </section>
+
     <section class="budget-top card" id="budgetTopSection">
-      <div class="section-title-row"><div><b>🏆 매수 가능 순위 TOP 10</b><span>수익기회·손익비·모멘텀·거래량·추세를 함께 반영하고, 치명적 위험만 제외</span></div></div>
+      <div class="section-title-row"><div><b>🏆 실전 우선순위 TOP 10</b><span>실제 매수 후보를 먼저, 조건에 가까운 관심후보를 그 다음에 보여줍니다</span></div></div>
       <div id="budgetTopEmpty" class="quality-empty">분석 후 내 예산에 맞는 후보를 표시합니다.</div>
       <div class="budget-table-wrap"><table class="budget-table" id="budgetTopTable" hidden><thead><tr><th>순위</th><th>종목</th><th>기회점수</th><th>판정</th><th>전략</th><th>진입가</th><th>수량/총액</th><th>1차 기대수익</th><th>1차 제한손실</th><th>추천시간</th></tr></thead><tbody id="budgetTopBody"></tbody></table></div>
       <div id="budgetTopMobile" class="budget-mobile"></div>
-      <p class="quality-note">※ 순위는 수익기회 점수 기반 상대순위입니다. 기대수익·제한손실은 계산값이며 실제 수익을 보장하지 않습니다.</p>
+      <p class="quality-note">※ 초록색 ‘매수 후보’와 노란색 ‘진입대기’를 구분해서 보세요. 기대수익·제한손실은 계산값이며 실제 수익을 보장하지 않습니다.</p>
     </section>
 
     <section class="quality-section card" id="qualitySection">
@@ -156,7 +163,7 @@
       </div>
       <div class="chips" id="chips">
         <button class="chip active" data-filter="ALL">전체</button>
-        <button class="chip" data-filter="BUY">🟢 매수 후보</button>
+        <button class="chip buy-chip" data-filter="BUY">🔥 매수 후보만</button>
         <button class="chip" data-filter="KR">국내</button>
         <button class="chip" data-filter="US">미국</button>
         <button class="chip" data-filter="ETF">ETF</button>
