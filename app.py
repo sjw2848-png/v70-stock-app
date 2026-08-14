@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from flask import Flask, jsonify, render_template, request
 from engine import analyze, analyze_search, fetch_fundamentals, fetch_recent_issues
 
-APP_VERSION = 'V70.12'
+APP_VERSION = 'V70.13'
 app = Flask(__name__)
 
 _cache_lock = threading.Lock()
@@ -87,7 +87,7 @@ def api_analyze():
         'stop_pct': 3.0,
         'min_rrr': 1.5,
         'trust_mode': 'balanced',
-        'mode': 'curated',
+        'mode': 'smart',
         'top_n': 60,
         'held': '',
         'search_avg_price': 0,
@@ -149,7 +149,7 @@ def api_search():
         'stop_pct': 3.0,
         'min_rrr': 1.5,
         'trust_mode': 'balanced',
-        'mode': 'curated',
+        'mode': 'smart',
         'top_n': 60,
         'held': '',
         'search_avg_price': 0,

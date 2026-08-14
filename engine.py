@@ -16,7 +16,7 @@ import yfinance as yf
 import FinanceDataReader as fdr
 
 # ---------------------------------------------------------------------
-# V70.12 BUY-FOCUS OPPORTUNITY-RANK WEB ENGINE
+# V70.13 SMART-SECTOR + SPLIT ETF + HIGH-RISK SCALP WEB ENGINE
 # - V69 core ideas retained
 # - no fake after-hours data
 # - US technical comparisons stay in native USD
@@ -310,7 +310,108 @@ def build_sector_analytics(results):
     for a in alloc:
         if a['weight_pct']>=60: warnings.append(f"🚨 {a['sector']} 비중 {a['weight_pct']}% — 한 섹터에 지나치게 집중")
         elif a['weight_pct']>=40: warnings.append(f"⚠️ {a['sector']} 비중 {a['weight_pct']}% — 섹터 쏠림 주의")
+    # Attach up to three individual-stock picks to each sector so the user does not have to choose manually.
+    rank_by_sector={r['sector']:r for r in ranking}
+    for sec, items in groups.items():
+        sec_info=rank_by_sector.get(sec)
+        if not sec_info:
+            continue
+        pool=[x for x in items if x.get('category')!='ETF' and not x.get('hard_block') and not x.get('held_price_krw')]
+        def pick_score(x):
+            rv=min(max(_safe_float(x.get('rvol'),1),0),4)/4*100
+            rs=np.clip(50+_safe_float(x.get('relative_strength_5d'),0)*5,0,100)
+            return (_safe_float(x.get('opportunity_score'),0)*0.46 + _safe_float(x.get('momentum'),0)*0.24 +
+                    rv*0.14 + rs*0.10 + (6 if x.get('opportunity_eligible') else 0))
+        pool=sorted(pool,key=pick_score,reverse=True)[:3]
+        picks=[]
+        for idx,x in enumerate(pool):
+            role='👑 대장 후보' if idx==0 else ('🥈 2등 후보' if idx==1 else '🎯 관심 후보')
+            picks.append({
+                'role':role,'name':x.get('name'),'code':x.get('code'),'category':x.get('category'),
+                'score':round(float(pick_score(x)),1),'opportunity_score':x.get('opportunity_score'),
+                'momentum':x.get('momentum'),'rvol':x.get('rvol'),'rrr':x.get('rrr'),
+                'opportunity_eligible':bool(x.get('opportunity_eligible') and x.get('qty',0)>0),
+                'entry_krw':x.get('entry_krw'),'buy_time':x.get('buy_time'),
+                'reason':f"기회 {_safe_float(x.get('opportunity_score'),0):.0f}점 · 모멘텀 {_safe_float(x.get('momentum'),0):.0f}점 · RVOL {_safe_float(x.get('rvol'),1):.2f}배"
+            })
+        sec_info['picks']=picks
+
     return {'top_sectors':ranking[:8],'holding_allocation':alloc,'concentration_warnings':warnings,'note':'섹터 강도와 대장 표시는 현재 분석군 내부의 상대 비교이며 시장 전체 순위를 의미하지 않습니다.'}
+
+
+def build_scalp_candidates(results, settings, limit=2):
+    """Select 1-2 liquid, fast-moving individual stocks for a clearly separated high-risk lane.
+    This is a technical watchlist, not a profit guarantee. Hard safety gates are never bypassed.
+    """
+    pool=[]
+    total_budget=max(_safe_float(settings.get('budget'),5_000_000),0)
+    trade_budget=max(_safe_float(settings.get('trade_budget'),300_000),0)
+    for x in results:
+        if not x.get('ok') or x.get('category')=='ETF' or x.get('hard_block') or x.get('held_price_krw'):
+            continue
+        avg_turn=_safe_float(x.get('avg_trading_value20_krw'),0)
+        # A high-risk candidate still needs enough liquidity to enter/exit quickly.
+        min_turn=2_000_000_000 if x.get('category')=='KR' else 10_000_000_000
+        if avg_turn and avg_turn < min_turn:
+            continue
+        rv=_safe_float(x.get('rvol'),1)
+        mom=_safe_float(x.get('momentum'),0)
+        opp=_safe_float(x.get('opportunity_score'),0)
+        att=_safe_float(x.get('attention_score'),0)
+        atr=_safe_float(x.get('atr_pct'),0)
+        rsi=_safe_float(x.get('rsi'),50)
+        r5=_safe_float(x.get('recent5_pct'),0)
+        rs=_safe_float(x.get('relative_strength_5d'),0)
+        if rv < 1.10 or mom < 55 or atr < 1.8 or atr > 16 or rsi >= 94 or r5 >= 35:
+            continue
+        speed=min(rv,4)/4*100
+        rs_score=float(np.clip(50+rs*5,0,100))
+        score=opp*.34+mom*.26+speed*.18+att*.10+rs_score*.12
+        if x.get('bb_break'): score+=5
+        if x.get('macd_bull'): score+=3
+        score=float(np.clip(score,0,100))
+        if score < 58:
+            continue
+        risk_points=0
+        reasons=[]
+        if atr>=9: risk_points+=3; reasons.append(f'ATR {atr:.1f}%로 변동성 매우 큼')
+        elif atr>=6: risk_points+=2; reasons.append(f'ATR {atr:.1f}%로 변동성 높음')
+        else: risk_points+=1; reasons.append(f'ATR {atr:.1f}%')
+        if rsi>=82: risk_points+=2; reasons.append(f'RSI {rsi:.0f} 과열권')
+        if abs(_safe_float(x.get('gap_pct'),0))>=5: risk_points+=1; reasons.append(f"갭 {abs(_safe_float(x.get('gap_pct'),0)):.1f}%")
+        if r5>=15: risk_points+=1; reasons.append(f'5일 +{r5:.1f}% 급등')
+        if rv>=2: reasons.append(f'거래량 {rv:.2f}배')
+        risk_level='🚨 매우 높음' if risk_points>=5 else ('⚠️ 높음' if risk_points>=3 else '⚠️ 중상')
+        entry=_safe_float(x.get('entry_krw'),x.get('price_krw'))
+        target_pct=float(np.clip(max(1.5,atr*.35),1.5,4.5))
+        stop_pct=float(np.clip(max(1.0,atr*.22),1.0,2.8))
+        target=_safe_int(entry*(1+target_pct/100))
+        stop=_safe_int(entry*(1-stop_pct/100))
+        risk_share=max(entry-stop,1)
+        scalp_budget=min(trade_budget*0.35, total_budget*0.08 if total_budget else trade_budget*0.35)
+        scalp_loss_cap=total_budget*0.0035 if total_budget else scalp_budget*0.05
+        q_budget=int(scalp_budget//entry) if entry>0 else 0
+        q_risk=int(scalp_loss_cap//risk_share) if risk_share>0 else 0
+        qty=max(0,min(q_budget,q_risk))
+        if qty<=0:
+            continue
+        if x.get('bb_break') and rv>=1.5:
+            trigger='거래량 유지 + 직전 고점 재돌파 확인 후 소액 진입'
+        elif x.get('macd_bull') and x.get('above_ma20'):
+            trigger='시초 추격 금지 · 눌림 후 재상승 확인 시 소액 진입'
+        else:
+            trigger='급등 추격 금지 · 지지 확인 뒤 반등 캔들에서만 진입'
+        pool.append({
+            'name':x.get('name'),'code':x.get('code'),'category':x.get('category'),'sector':x.get('sector'),
+            'score':round(score,1),'risk_level':risk_level,'risk_reasons':reasons[:4],
+            'entry_krw':_safe_int(entry),'target_krw':target,'stop_krw':stop,'qty':qty,
+            'target_pct':round(target_pct,1),'stop_pct':round(stop_pct,1),
+            'buy_time':x.get('buy_time'),'trigger':trigger,'tech':x.get('tech'),
+            'rvol':x.get('rvol'),'momentum':x.get('momentum'),'opportunity_score':x.get('opportunity_score'),
+            'note':'고위험 단타 관찰 후보입니다. 일봉/거래량 기반 선별이라 장중 호가·체결강도 확인 없이 즉시 매수하면 안 됩니다.'
+        })
+    pool.sort(key=lambda x:x['score'], reverse=True)
+    return pool[:limit]
 
 
 def auto_strategy(close_native, ma, rsi, rvol, high20, prev_day_change, recent5):
@@ -412,7 +513,7 @@ def load_krx_top(n=60):
             name = str(r[ncol]).strip()
             if any(x in name for x in ['우B', '(우)', '스팩', '리츠', 'KODEX', 'TIGER', '인버스', '선물']):
                 continue
-            out[code] = {'name': name, 'theme': 'KRX 시가총액 상위', 'target_pct': 4.0, 'prob': 70, 'tech': '추세매매'}
+            out[code] = {'name': name, 'theme': 'KRX 시가총액 상위', 'source_sector': (str(r[scol]).strip() if scol else ''), 'target_pct': 4.0, 'prob': 70, 'tech': '추세매매'}
     except Exception:
         pass
     return out
@@ -1472,9 +1573,12 @@ def parse_held(text: str):
 
 def build_universe(mode='curated', top_n=60):
     if mode == 'popular':
-        kr = fetch_popular(20)
+        kr = {**KR_CURATED, **fetch_popular(30)}
     elif mode == 'top':
         kr = load_krx_top(top_n)
+    elif mode == 'smart':
+        # Broad enough for sector discovery without making the free server analyze the whole market.
+        kr = {**load_krx_top(min(top_n, 40)), **fetch_popular(25), **KR_CURATED}
     elif mode == 'mixed':
         kr = {**load_krx_top(min(top_n, 100)), **fetch_popular(20), **KR_CURATED}
     else:
@@ -1533,6 +1637,12 @@ def analyze(settings: Dict[str, Any]):
     buyable = [x for x in ranked if x.get('opportunity_eligible') and x.get('qty', 0) > 0]
     for idx, x in enumerate(buyable, 1):
         x['buyable_rank'] = idx
+    individual_ranked=[x for x in ranked if x.get('category')!='ETF']
+    etf_ranked=[x for x in ranked if x.get('category')=='ETF']
+    individual_buyable=[x for x in individual_ranked if x.get('opportunity_eligible') and x.get('qty',0)>0]
+    etf_buyable=[x for x in etf_ranked if x.get('opportunity_eligible') and x.get('qty',0)>0]
+    for idx,x in enumerate(individual_buyable,1): x['individual_buy_rank']=idx
+    for idx,x in enumerate(etf_buyable,1): x['etf_buy_rank']=idx
     results.sort(key=lambda x: (
         x.get('ok', False),
         1 if x.get('opportunity_eligible') else 0,
@@ -1540,20 +1650,23 @@ def analyze(settings: Dict[str, Any]):
         _safe_float(x.get('rrr'), 0)
     ), reverse=True)
 
-    recommended = buyable
     sector_analysis = build_sector_analytics(valid)
+    scalp_candidates = build_scalp_candidates(valid, settings, limit=2)
     summary = {
         'total': len(results),
         'valid': len(valid),
-        'recommended': len(recommended),
+        'recommended': len(individual_buyable),
         'buyable_count': len(buyable),
+        'individual_buyable_count': len(individual_buyable),
+        'etf_buyable_count': len(etf_buyable),
+        'scalp_count': len(scalp_candidates),
         's_count': sum(1 for x in valid if x.get('grade') == 'S'),
         'a_count': sum(1 for x in valid if x.get('grade') == 'A'),
         'long_quality_count': sum(1 for x in valid if x.get('long_quality_candidate')),
         'elapsed_sec': round(time.time() - started, 1),
         'usdkrw': round(fx, 2),
     }
-    return {'market': market, 'summary': summary, 'sector_analysis': sector_analysis, 'results': results}
+    return {'market': market, 'summary': summary, 'sector_analysis': sector_analysis, 'scalp_candidates': scalp_candidates, 'results': results}
 
 # ---------------------------------------------------------------------
 # V70.4 on-demand symbol search

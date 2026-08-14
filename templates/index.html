@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#07101e" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="V70.12 주식판" />
-  <title>V70.12 매수후보 강조판</title>
+  <meta name="apple-mobile-web-app-title" content="V70.13 주식판" />
+  <title>V70.13 스마트 종목선별판</title>
   <link rel="manifest" href="/static/manifest.json" />
   <link rel="icon" href="/static/icon-192.png" />
   <link rel="apple-touch-icon" href="/static/icon-192.png" />
@@ -16,7 +16,7 @@
 <body>
   <header class="topbar">
     <div class="brand-wrap">
-      <div class="eyebrow">V70.12 · 매수후보 강조판</div>
+      <div class="eyebrow">V70.13 · 스마트 섹터·단타 선별판</div>
       <h1>오늘 사도 돼?</h1>
       <p id="connectionText">열자마자 YES · WAIT · NO만 먼저 확인</p>
     </div>
@@ -108,9 +108,11 @@
     </section>
 
     <section class="summary-row" id="summaryRow">
-      <div class="metric important"><span>🟢 매수 후보</span><strong id="recommended">-</strong></div>
+      <div class="metric important"><span>🟢 개별주 매수</span><strong id="recommended">-</strong></div>
       <div class="metric"><span>S급</span><strong id="sCount">-</strong></div>
       <div class="metric"><span>A급</span><strong id="aCount">-</strong></div>
+      <div class="metric"><span>🛡️ ETF 매수</span><strong id="etfBuyCount">-</strong></div>
+      <div class="metric"><span>⚡ 고위험 단타</span><strong id="scalpCount">-</strong></div>
       <div class="metric"><span>💎 장기 우량</span><strong id="longQualityCount">-</strong></div>
       <div class="metric"><span>분석 종목</span><strong id="totalCount">-</strong></div>
     </section>
@@ -123,8 +125,20 @@
       <p class="buy-focus-note">※ 초록색은 현재 설정에서 매수 기준 통과, 노란색은 아직 ‘관심/진입대기’입니다. 관심후보를 매수 후보로 오해하지 마세요.</p>
     </section>
 
+    <section class="etf-focus card" id="etfFocusSection">
+      <div class="section-title-row"><div><b>🛡️ ETF 매수 후보 TOP 3</b><span>개별주와 섞지 않고 장기·분산용 ETF만 따로 비교합니다</span></div></div>
+      <div id="etfFocusHeadline" class="etf-focus-headline">분석 후 ETF 후보를 표시합니다.</div>
+      <div id="etfFocusCards" class="etf-focus-cards"></div>
+    </section>
+
+    <section class="scalp-focus card" id="scalpFocusSection">
+      <div class="section-title-row"><div><b>⚡ 고위험 단타 관찰 후보</b><span>변동성과 거래량이 큰 개별주 중 1~2개만 별도로 표시합니다</span></div></div>
+      <div id="scalpCards" class="scalp-cards"><div class="quality-empty">분석 후 단타 관찰 후보를 표시합니다.</div></div>
+      <p class="scalp-warning">🚨 이 영역은 일반 매수 후보보다 위험합니다. ‘바로 수익’이 보장되는 종목이 아니며, 표시된 진입 조건과 손절선을 지키는 전제로만 참고하세요.</p>
+    </section>
+
     <section class="budget-top card" id="budgetTopSection">
-      <div class="section-title-row"><div><b>🏆 실전 우선순위 TOP 10</b><span>실제 매수 후보를 먼저, 조건에 가까운 관심후보를 그 다음에 보여줍니다</span></div></div>
+      <div class="section-title-row"><div><b>🏆 개별주 실전 우선순위 TOP 10</b><span>ETF를 제외하고 실제 개별주 매수 후보를 먼저, 조건에 가까운 관심후보를 그 다음에 보여줍니다</span></div></div>
       <div id="budgetTopEmpty" class="quality-empty">분석 후 내 예산에 맞는 후보를 표시합니다.</div>
       <div class="budget-table-wrap"><table class="budget-table" id="budgetTopTable" hidden><thead><tr><th>순위</th><th>종목</th><th>기회점수</th><th>판정</th><th>전략</th><th>진입가</th><th>수량/총액</th><th>1차 기대수익</th><th>1차 제한손실</th><th>추천시간</th></tr></thead><tbody id="budgetTopBody"></tbody></table></div>
       <div id="budgetTopMobile" class="budget-mobile"></div>
@@ -142,6 +156,8 @@
     <section class="sector-section card" id="sectorSection">
       <div class="section-title-row"><div><b>🔥 오늘 강한 섹터 · 테마</b><span>모멘텀·5일수익률·RVOL·20일선 상단 종목 비율을 함께 비교</span></div></div>
       <div id="sectorTop" class="sector-top"><div class="quality-empty">분석 후 강한 섹터를 표시합니다.</div></div>
+      <div class="sector-pick-title">🎯 강한 섹터에서 종목까지 자동 추천</div>
+      <div id="sectorPickCards" class="sector-pick-cards"><div class="quality-empty">강한 섹터별 대장·2등·관심 종목을 표시합니다.</div></div>
       <div class="sector-subgrid">
         <div><b>💎 섹터별 장기 우량</b><div id="sectorLong" class="sector-mini-list">-</div></div>
         <div><b>🧺 내 보유주 섹터 비중</b><div id="sectorHoldings" class="sector-mini-list">보유주 입력 시 표시</div><div id="sectorWarnings" class="sector-warnings"></div></div>
@@ -182,7 +198,7 @@
           <label>기본 손절 %<input id="stopPct" inputmode="decimal" type="number" value="3" step="0.1" /></label>
           <label>정규매수 최소 손익비<input id="minRrr" inputmode="decimal" type="number" value="1.5" step="0.1" /></label>
           <label>분석 강도<select id="trustMode"><option value="conservative">보수적</option><option value="balanced" selected>균형(기회+안전)</option><option value="aggressive">적극적(기회우선)</option></select></label>
-          <label>분석 종목<select id="mode"><option value="curated" selected>기본 추천군</option><option value="popular">네이버 인기종목</option><option value="top">KRX 시총 상위</option><option value="mixed">종합 분석</option></select></label>
+          <label>분석 종목<select id="mode"><option value="smart" selected>스마트 발굴(추천)</option><option value="curated">기본 추천군</option><option value="popular">인기+추천군</option><option value="top">KRX 시총 상위</option><option value="mixed">종합 분석(느림)</option></select></label>
           <label>시총 상위 N<input id="topN" inputmode="numeric" type="number" value="60" min="10" max="150" step="10" /></label>
         </div>
         <label class="wide">보유종목 · 평단가 · 수량<input id="held" type="text" placeholder="예: 삼성전자:75000:20, NVDA:120:5" /></label>
