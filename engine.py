@@ -16,7 +16,7 @@ import yfinance as yf
 import FinanceDataReader as fdr
 
 # ---------------------------------------------------------------------
-# V70.13 SMART-SECTOR + SPLIT ETF + HIGH-RISK SCALP WEB ENGINE
+# V70.13.1 FAST-LOAD SMART-SECTOR + SPLIT ETF + HIGH-RISK SCALP WEB ENGINE
 # - V69 core ideas retained
 # - no fake after-hours data
 # - US technical comparisons stay in native USD
@@ -1578,7 +1578,7 @@ def build_universe(mode='curated', top_n=60):
         kr = load_krx_top(top_n)
     elif mode == 'smart':
         # Broad enough for sector discovery without making the free server analyze the whole market.
-        kr = {**load_krx_top(min(top_n, 40)), **fetch_popular(25), **KR_CURATED}
+        kr = {**load_krx_top(min(top_n, 18)), **fetch_popular(12), **KR_CURATED}
     elif mode == 'mixed':
         kr = {**load_krx_top(min(top_n, 100)), **fetch_popular(20), **KR_CURATED}
     else:
@@ -1620,7 +1620,7 @@ def analyze(settings: Dict[str, Any]):
     tasks = list(dedup.values())
 
     results = []
-    workers = 4 if len(tasks) < 80 else 6
+    workers = 6 if len(tasks) <= 50 else 8
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
         futs = [ex.submit(analyze_one, c, i, m, settings, fx, market['state']) for c, i, m in tasks]
         for fut in concurrent.futures.as_completed(futs):
@@ -1655,6 +1655,7 @@ def analyze(settings: Dict[str, Any]):
     summary = {
         'total': len(results),
         'valid': len(valid),
+        'universe_size': len(tasks),
         'recommended': len(individual_buyable),
         'buyable_count': len(buyable),
         'individual_buyable_count': len(individual_buyable),

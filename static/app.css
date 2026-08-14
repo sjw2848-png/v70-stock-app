@@ -83,7 +83,7 @@
 @media(max-width:900px){.buy-focus-cards{grid-template-columns:1fr}.buy-focus-item{padding:12px}.focus-top b{font-size:15px}}
 
 
-/* V70.13 split ETF + smart sectors + high-risk scalp */
+/* V70.13.1 fast-load split ETF + smart sectors + high-risk scalp */
 .etf-focus{margin-top:14px;border:1px solid #2563eb;background:linear-gradient(145deg,#08172c,#091523)}
 .etf-focus-headline{margin-top:10px;padding:10px 12px;border-radius:11px;background:#0d2448;border:1px solid #2563eb;color:#bfdbfe}
 .etf-focus-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:10px}.etf-focus-item{border-radius:13px;padding:12px;background:#0a1830;border:1px solid #284e86}.etf-focus-item>div{display:flex;justify-content:space-between;gap:8px}.etf-focus-item>div span{color:#93c5fd;font-weight:900}.etf-focus-item strong{display:block;margin-top:8px;color:#bfdbfe}.etf-focus-item small{display:block;margin-top:7px;color:#91a5bd;line-height:1.5}.etf-buy{border-color:#38bdf8;box-shadow:0 0 18px rgba(56,189,248,.08)}.etf-watch{opacity:.9}
