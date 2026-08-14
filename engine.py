@@ -6,6 +6,8 @@ import re
 import time
 from dataclasses import dataclass
 from typing import Dict, Any, List, Tuple
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -14,7 +16,7 @@ import yfinance as yf
 import FinanceDataReader as fdr
 
 # ---------------------------------------------------------------------
-# V70.9 SAFE WEB ENGINE
+# V70.11 OPPORTUNITY-RANK WEB ENGINE
 # - V69 core ideas retained
 # - no fake after-hours data
 # - US technical comparisons stay in native USD
@@ -28,7 +30,7 @@ GRADE_THRESHOLDS = {
 }
 
 KR_CURATED = {
-    '290690': {'name': '소룩스', 'theme': '아리바이오 합병/무증', 'target_pct': 12.0, 'prob': 79, 'tech': '상따매매'},
+    '290690': {'name': '아리바이오홀딩스', 'theme': '바이오 플랫폼/아리바이오 합병 이벤트', 'target_pct': 12.0, 'prob': 79, 'tech': '추세매매'},
     '038110': {'name': '에코플라스틱', 'theme': '차량 경량화 범퍼', 'target_pct': 9.0, 'prob': 77, 'tech': '눌림목매매'},
     '205470': {'name': '휴마시스', 'theme': '체외진단/방역', 'target_pct': 8.0, 'prob': 60, 'tech': '뉴스매매'},
     '001470': {'name': '삼부토건', 'theme': '건설 재건/저가주 수급', 'target_pct': 12.0, 'prob': 65, 'tech': '추세매매'},
@@ -96,12 +98,16 @@ KNOWN_THEME_TAGS = {
     '삼성중공업':['LNG선','조선수주'], '한화오션':['조선','방산'], '현대로템':['방산','철도'],
     'HD현대일렉트릭':['변압기','전력기기','AI 데이터센터'], '두산에너빌리티':['원전','SMR','가스터빈'],
     '알테오젠':['바이오','기술이전'], '셀트리온':['바이오시밀러'], '삼성바이오로직스':['CDMO','바이오'],
+    '아리바이오홀딩스':['바이오','AR1001','합병 이벤트'],
     'SK텔레콤':['통신','AI'], 'KT':['통신','IDC'], 'KT&G':['담배','배당'],
     'NVDA':['AI GPU','데이터센터','반도체'], 'MSFT':['클라우드','AI','소프트웨어'], 'PLTR':['AI 플랫폼','데이터분석'],
     'TSLA':['EV','에너지저장','자율주행'], 'AAPL':['소비자IT','서비스'],
 }
 
 _KRX_CACHE = None
+_KRX_CODE_TO_NAME = None
+_KRX_CACHE_AT = 0.0
+KR_NAME_OVERRIDES = {'290690': '아리바이오홀딩스'}
 
 
 def _safe_float(v, default=0.0):
@@ -279,7 +285,7 @@ def build_sector_analytics(results):
         avg_r5=float(np.mean([_safe_float(x.get('recent5_pct'),0) for x in items]))
         avg_rvol=float(np.mean([_safe_float(x.get('rvol'),1) for x in items]))
         breadth=100.0*sum(1 for x in items if x.get('above_ma20'))/n
-        buy_count=sum(1 for x in items if x.get('grade') in ('S','A','B') and x.get('qty',0)>0 and not x.get('hard_block'))
+        buy_count=sum(1 for x in items if x.get('opportunity_eligible') and x.get('qty',0)>0 and not x.get('hard_block'))
         long_count=sum(1 for x in items if x.get('long_quality_candidate'))
         turnover=sum(_safe_float(x.get('trading_value_krw'),0) for x in items)
         score=np.clip(avg_m*0.45 + np.clip(avg_r5+5,0,15)*1.4 + np.clip(avg_rvol,0,3)*8 + breadth*0.20, 0, 100)
@@ -337,18 +343,51 @@ def calc_grade(momentum, kelly, rrr):
     return 'C'
 
 
-def get_krx_mapping():
-    global _KRX_CACHE
-    if _KRX_CACHE is not None:
+
+def _normalize_kr_code(value):
+    code = str(value or '').strip().replace('KRX:', '')
+    if code.startswith('KR') and len(code) >= 9:
+        code = code[3:9]
+    m = re.search(r'(\d{6})', code)
+    if m:
+        return m.group(1)
+    return code.zfill(6) if code.isdigit() else code
+
+
+def get_krx_mapping(force=False):
+    """Current KRX name map with a short TTL so renamed stocks refresh automatically."""
+    global _KRX_CACHE, _KRX_CODE_TO_NAME, _KRX_CACHE_AT
+    if (not force and _KRX_CACHE is not None and _KRX_CODE_TO_NAME is not None
+            and time.time() - _KRX_CACHE_AT < 6 * 3600):
         return _KRX_CACHE
+    mapping, reverse = {}, {}
     try:
         df = fdr.StockListing('KRX')
         ccol = next((c for c in ['Code', 'Symbol', '단축코드'] if c in df.columns), df.columns[0])
         ncol = next((c for c in ['Name', '한글 종목약명', '종목명'] if c in df.columns), df.columns[1])
-        _KRX_CACHE = {str(r[ncol]).strip(): str(r[ccol]).strip().replace('KRX:', '').zfill(6) for _, r in df.iterrows()}
+        for _, r in df.iterrows():
+            code = _normalize_kr_code(r[ccol])
+            name = str(r[ncol]).strip()
+            if not code or not name or not code.isdigit():
+                continue
+            mapping[name] = code
+            reverse[code] = name
     except Exception:
-        _KRX_CACHE = {}
+        pass
+
+    # Officially verified recent renames / fallback for data-provider lag.
+    for code, name in KR_NAME_OVERRIDES.items():
+        mapping[name] = code
+        reverse[code] = name
+
+    _KRX_CACHE, _KRX_CODE_TO_NAME, _KRX_CACHE_AT = mapping, reverse, time.time()
     return _KRX_CACHE
+
+
+def get_current_kr_name(code, fallback=''):
+    get_krx_mapping()
+    code = _normalize_kr_code(code)
+    return (_KRX_CODE_TO_NAME or {}).get(code) or KR_NAME_OVERRIDES.get(code) or fallback or code
 
 
 def load_krx_top(n=60):
@@ -738,13 +777,83 @@ def build_long_term_plan(df, close, ma, momentum, market_state, price_krw, setti
 
 
 
-def build_safety_and_quality(df, close, ma, atr_pct, rsi, recent5, trading_value_krw, long_plan, market, price_krw, total_budget, trade_budget):
-    """Beginner safety gates and a conservative long-term quality candidate label.
-    This is not a fundamental-quality certification; fundamentals can confirm it later.
+
+def _session_volume_adjustment(df, market, raw_rvol):
+    """Normalize an in-progress daily volume bar so 09:10 is not compared with a full day."""
+    raw = _safe_float(raw_rvol, 1.0)
+    try:
+        tz = ZoneInfo('America/New_York') if market == 'US' else ZoneInfo('Asia/Seoul')
+        now = datetime.now(tz)
+        last = pd.Timestamp(df.index[-1])
+        if last.tzinfo is not None:
+            last_date = last.tz_convert(tz).date()
+        else:
+            last_date = last.date()
+        if last_date != now.date() or now.weekday() >= 5:
+            return raw, 1.0
+        if market == 'US':
+            start_min, end_min = 9 * 60 + 30, 16 * 60
+        else:
+            start_min, end_min = 9 * 60, 15 * 60 + 30
+        cur = now.hour * 60 + now.minute + now.second / 60
+        if cur < start_min or cur > end_min:
+            return raw, 1.0
+        elapsed = max(cur - start_min, 10.0)
+        progress = min(1.0, elapsed / (end_min - start_min))
+        paced = float(np.clip(raw / max(progress, 0.01), 0.0, 6.0))
+        return paced, progress
+    except Exception:
+        return raw, 1.0
+
+
+def build_opportunity_score(momentum, rrr, rvol, strategy_confidence, close, ma, macd_bull,
+                            bb_break, relative_strength_5d, recent5, rsi, atr_pct, market_state,
+                            hard_block=False):
+    """Profit-opportunity score. Safety can penalize it, but only hard gates can zero eligibility."""
+    mom = float(np.clip(_safe_float(momentum, 0), 0, 100))
+    rr = float(np.clip((_safe_float(rrr, 0) - 0.7) / 1.8 * 100, 0, 100))
+    rv = _safe_float(rvol, 1.0)
+    vol_score = float(np.clip(45 + (rv - 1.0) * 38, 10, 100))
+    conf = float(np.clip(_safe_float(strategy_confidence, 0) * 100 if _safe_float(strategy_confidence, 0) <= 1 else _safe_float(strategy_confidence, 0), 0, 100))
+    ma5, ma20, ma60 = ma.get('ma5'), ma.get('ma20'), ma.get('ma60')
+    trend = 20.0
+    if ma20 and close > ma20: trend += 25
+    if ma5 and close > ma5: trend += 15
+    if ma5 and ma20 and ma5 > ma20: trend += 15
+    if ma20 and ma60 and ma20 > ma60: trend += 10
+    if macd_bull: trend += 10
+    if bb_break: trend += 5
+    trend = float(np.clip(trend, 0, 100))
+    rs = float(np.clip(50 + _safe_float(relative_strength_5d, 0) * 5, 0, 100))
+    score = mom * .28 + rr * .19 + vol_score * .14 + trend * .18 + rs * .11 + conf * .10
+    state = str(market_state or '')
+    if '강세' in state: score += 4
+    elif '약세' in state: score -= 4
+    elif '급락' in state: score -= 10
+    if atr_pct >= 12: score -= 12
+    elif atr_pct >= 8: score -= 6
+    if rsi is not None and rsi >= 88: score -= 8
+    if recent5 >= 25: score -= 10
+    elif recent5 >= 15: score -= 5
+    if hard_block: score -= 45
+    score = float(np.clip(score, 0, 100))
+    if score >= 82: label = '🔥 최우선 기회'
+    elif score >= 72: label = '🟢 매수 우선'
+    elif score >= 62: label = '🟡 분할 진입 검토'
+    elif score >= 52: label = '⚪ 관찰 후보'
+    else: label = '🔴 후순위'
+    return round(score, 1), label
+
+
+
+def build_safety_and_quality(df, close, ma, atr_pct, rsi, recent5, trading_value_krw,
+                             avg_trading_value20_krw, long_plan, market, price_krw,
+                             total_budget, trade_budget):
+    """Hard-block only truly broken data / extremely illiquid names.
+    Ordinary volatility and intraday-low volume become warnings, not automatic bans.
     """
     flags=[]
     hard_block=False
-    # Data freshness: allow weekends/holidays, block clearly stale daily data.
     stale_days=None
     try:
         last=pd.Timestamp(df.index[-1]).tz_localize(None)
@@ -759,16 +868,24 @@ def build_safety_and_quality(df, close, ma, atr_pct, rsi, recent5, trading_value
         flags.append('단기 급등·과열: 추격매수 주의')
     if atr_pct>=9:
         flags.append(f'변동성 매우 높음(ATR {atr_pct:.1f}%)')
-    # Liquidity floor is intentionally low enough not to exclude ordinary liquid names.
-    liq_floor=500_000_000 if market!='US' else 1_000_000_000
-    if trading_value_krw<liq_floor:
-        flags.append('거래대금이 적어 체결·급변 위험')
+
+    # Use completed-day average turnover for the hard liquidity gate.
+    # Current intraday turnover is naturally small in the morning and must not cause a false ban.
+    hard_floor = 100_000_000 if market!='US' else 500_000_000
+    warn_floor = 500_000_000 if market!='US' else 3_000_000_000
+    avg_turn = _safe_float(avg_trading_value20_krw, 0)
+    if avg_turn and avg_turn < hard_floor:
+        flags.append('평균 거래대금이 매우 적어 체결 위험이 큼')
         hard_block=True
+    elif avg_turn and avg_turn < warn_floor:
+        flags.append('평균 거래대금이 낮아 소액·분할 접근 권장')
+
     if total_budget>0 and trade_budget>total_budget*0.25:
         flags.append('한 종목 예산이 전체 자금의 25% 초과')
     ma60,ma120=ma.get('ma60'),ma.get('ma120')
     long_score=float((long_plan or {}).get('score',0))
-    quality=(long_score>=75 and ma60 and ma120 and close>ma60>ma120 and atr_pct<=7.0 and trading_value_krw>=liq_floor and recent5<15)
+    quality=(long_score>=75 and ma60 and ma120 and close>ma60>ma120 and atr_pct<=7.0
+             and (not avg_turn or avg_turn>=warn_floor) and recent5<15)
     if quality:
         qlabel='💎 장기 우량 ETF 후보' if market=='ETF' else '💎 장기 우량주 후보'
         qreason='중장기 추세·유동성·변동성 기준 통과 · 실적 확인 전'
@@ -776,8 +893,10 @@ def build_safety_and_quality(df, close, ma, atr_pct, rsi, recent5, trading_value
         qlabel=None; qreason=None
     return {
         'risk_flags':flags[:5], 'hard_block':hard_block, 'stale_days':stale_days,
+        'avg_trading_value20_krw':_safe_int(avg_turn),
         'long_quality_candidate':bool(quality), 'long_quality_label':qlabel, 'long_quality_reason':qreason
     }
+
 
 def build_held_action(held_price, held_qty, close_krw, momentum, rsi, grade, ma20_krw, stop1_krw, qty_add, rvol=1.0, flow_score=50.0):
     if held_price <= 0:
@@ -1037,6 +1156,9 @@ def _load_price(code, market):
 
 def analyze_one(code, info, market, settings, fx, market_state):
     try:
+        info = dict(info or {})
+        if market in ('KR', 'ETF'):
+            info['name'] = get_current_kr_name(code, info.get('name', code))
         df = _load_price(code, market)
         if df is None or df.empty:
             raise ValueError('가격 데이터 수신 실패')
@@ -1056,7 +1178,8 @@ def analyze_one(code, info, market, settings, fx, market_state):
 
         atr = calc_atr(df)
         atr_pct = atr / close * 100 if atr and close else 3.0
-        rvol = calc_rvol(df) or 1.0
+        rvol_raw = calc_rvol(df) or 1.0
+        rvol, session_progress = _session_volume_adjustment(df, market, rvol_raw)
         ma = calc_ma(df)
         rsi = calc_rsi(df)
         macd_bull = calc_macd(df)
@@ -1130,17 +1253,22 @@ def analyze_one(code, info, market, settings, fx, market_state):
 
         qty_budget = int(trade_budget // entry_krw) if entry_krw > 0 else 0
         qty_risk = int(max_loss // risk_per_share_krw) if risk_per_share_krw > 0 else 0
-        qty = min(qty_budget, qty_risk)
-        if grade == 'C' or kelly <= 0:
-            qty = 0
-
-        invested = qty * entry_krw
-        expected_profit = qty * (target1 - entry) * krw_mult
-        expected_loss = qty * (stop1 - entry) * krw_mult
+        qty_capacity = min(qty_budget, qty_risk)
+        strict_qty = qty_capacity if grade != 'C' and kelly > 0 else 0
+        qty = strict_qty
 
         vol = _safe_float(df['Volume'].iloc[-1], 0)
         avg_vol20 = _safe_float(df['Volume'].tail(20).mean(), 0) if 'Volume' in df.columns else 0
         trading_value_krw = close * vol * krw_mult
+        avg_trading_value20_krw = 0.0
+        if 'Volume' in df.columns and len(df) >= 5:
+            tv = (df['Close'] * df['Volume'] * krw_mult).dropna()
+            if len(tv) >= 21:
+                avg_trading_value20_krw = _safe_float(tv.iloc[-21:-1].mean(), 0)
+            elif len(tv) > 1:
+                avg_trading_value20_krw = _safe_float(tv.iloc[:-1].tail(20).mean(), 0)
+            else:
+                avg_trading_value20_krw = _safe_float(tv.tail(20).mean(), 0)
         timing = get_trade_timing(tech, market)
         taxonomy = classify_theme_detail(info.get('name', code), info.get('theme', ''), info.get('source_sector',''))
         sector = taxonomy['industry']
@@ -1168,15 +1296,41 @@ def analyze_one(code, info, market, settings, fx, market_state):
         )
         long_plan = build_long_term_plan(df, close, ma, momentum, market_state, close_krw, settings)
         safety = build_safety_and_quality(
-            df, close, ma, atr_pct, rsi, recent5, trading_value_krw, long_plan, market,
-            close_krw, total_budget, trade_budget
+            df, close, ma, atr_pct, rsi, recent5, trading_value_krw, avg_trading_value20_krw,
+            long_plan, market, close_krw, total_budget, trade_budget
         )
-        # Beginner safety: do not recommend a new position when a hard safety gate fails.
+        opportunity_score, opportunity_label = build_opportunity_score(
+            momentum, rrr, rvol, confidence, close, ma, macd_bull, bb_break,
+            relative_strength_5d, recent5, rsi, atr_pct, market_state,
+            hard_block=safety['hard_block']
+        )
+        # Profit-seeking lane: lets good risk/reward + momentum names rank and receive a
+        # smaller starter size even when the strict S/A/B gate is not met. Hard safety
+        # blocks can never be overridden.
+        trust_rules = {
+            'conservative': (76, max(1.40, min_rrr * 0.95), 0.35, 60),
+            'balanced': (67, max(1.15, min_rrr * 0.80), 0.50, 55),
+            'aggressive': (60, max(1.00, min_rrr * 0.70), 0.70, 50),
+        }
+        opp_cut, opp_rrr_floor, opp_size_factor, opp_mom_floor = trust_rules.get(trust, trust_rules['balanced'])
+        extreme_overheat = bool((rsi is not None and rsi >= 92) or recent5 >= 30)
+        opportunity_eligible = bool(
+            held_price <= 0 and not safety['hard_block'] and not extreme_overheat
+            and qty_capacity > 0 and opportunity_score >= opp_cut
+            and rrr >= opp_rrr_floor and momentum >= opp_mom_floor
+        )
         if safety['hard_block'] and held_price <= 0:
             qty = 0
-            invested = expected_profit = expected_loss = 0
-            if grade != 'C':
-                decision = '안전장치로 신규진입 보류'
+            decision = '안전장치로 신규진입 보류'
+        elif opportunity_eligible:
+            if strict_qty <= 0:
+                qty = max(1, min(qty_capacity, int(max(1, round(qty_capacity * opp_size_factor)))))
+                decision = '기회형 소액 후보'
+            elif grade == 'B':
+                decision = '분할 매수 후보'
+        invested = qty * entry_krw
+        expected_profit = qty * (target1 - entry) * krw_mult
+        expected_loss = qty * (stop1 - entry) * krw_mult
         held_action = build_held_action(
             held_price, held_qty, close_krw, momentum, rsi, grade,
             _safe_int(ma.get('ma20', 0) * krw_mult), _safe_int(stop1 * krw_mult), qty,
@@ -1218,6 +1372,8 @@ def analyze_one(code, info, market, settings, fx, market_state):
             'assumed_win_rate': round(prob, 1),
             'atr_pct': round(atr_pct, 2),
             'rvol': round(rvol, 2),
+            'rvol_raw': round(rvol_raw, 2),
+            'session_progress_pct': round(session_progress * 100, 1),
             'rsi': None if rsi is None else round(rsi, 1),
             'gap_pct': round(gap_pct, 2),
             'current_day_pct': round(current_day_chg, 2),
@@ -1235,6 +1391,12 @@ def analyze_one(code, info, market, settings, fx, market_state):
             'volume': _safe_int(vol),
             'avg_volume20': _safe_int(avg_vol20),
             'trading_value_krw': _safe_int(trading_value_krw),
+            'avg_trading_value20_krw': _safe_int(avg_trading_value20_krw),
+            'opportunity_score': opportunity_score,
+            'opportunity_label': opportunity_label,
+            'opportunity_eligible': opportunity_eligible,
+            'opportunity_rrr_floor': round(opp_rrr_floor, 2),
+            'qty_capacity': qty_capacity,
             'attention_score': attention_score,
             'attention_label': attention_label,
             'attention_reasons': attention_reasons,
@@ -1261,7 +1423,7 @@ def analyze_one(code, info, market, settings, fx, market_state):
             **safety,
             'after_hours': None,
             'market_regime': market_state,
-            'data_note': '일봉 기반 기술지표. 시간외 가격은 제공하지 않음. 수급은 가격·거래량 프록시이며 실제 외국인/기관 순매수와 다릅니다.',
+            'data_note': '일봉 기반 기술지표. 장중 거래량은 경과시간으로 보정한 RVOL을 사용합니다. 시간외 가격은 제공하지 않으며 수급은 가격·거래량 프록시입니다.',
         }
     except Exception as e:
         return {
@@ -1360,16 +1522,31 @@ def analyze(settings: Dict[str, Any]):
         for fut in concurrent.futures.as_completed(futs):
             results.append(fut.result())
 
-    grade_rank = {'S': 4, 'A': 3, 'B': 2, 'C': 1}
-    results.sort(key=lambda x: (x.get('ok', False), grade_rank.get(x.get('grade', 'C'), 0), x.get('momentum', 0)), reverse=True)
-
     valid = [x for x in results if x.get('ok')]
-    recommended = [x for x in valid if x.get('grade') in ('S', 'A', 'B') and x.get('qty', 0) > 0]
+    ranked = sorted(
+        [x for x in valid if not x.get('hard_block')],
+        key=lambda x: (_safe_float(x.get('opportunity_score'), 0), _safe_float(x.get('rrr'), 0), _safe_float(x.get('momentum'), 0)),
+        reverse=True
+    )
+    for idx, x in enumerate(ranked, 1):
+        x['opportunity_rank'] = idx
+    buyable = [x for x in ranked if x.get('opportunity_eligible') and x.get('qty', 0) > 0]
+    for idx, x in enumerate(buyable, 1):
+        x['buyable_rank'] = idx
+    results.sort(key=lambda x: (
+        x.get('ok', False),
+        1 if x.get('opportunity_eligible') else 0,
+        _safe_float(x.get('opportunity_score'), 0),
+        _safe_float(x.get('rrr'), 0)
+    ), reverse=True)
+
+    recommended = buyable
     sector_analysis = build_sector_analytics(valid)
     summary = {
         'total': len(results),
         'valid': len(valid),
         'recommended': len(recommended),
+        'buyable_count': len(buyable),
         's_count': sum(1 for x in valid if x.get('grade') == 'S'),
         'a_count': sum(1 for x in valid if x.get('grade') == 'A'),
         'long_quality_count': sum(1 for x in valid if x.get('long_quality_candidate')),
@@ -1404,6 +1581,9 @@ def _resolve_search_query(query: str, market_hint: str = 'AUTO'):
         '월마트':'WMT', 'WALMART':'WMT',
         'JP모건':'JPM', 'JPMORGAN':'JPM',
     }
+    if q in ('소룩스', 'SOLUX') and hint != 'US':
+        return '290690', dict(KR_CURATED['290690']), 'KR'
+
     alias_code = us_aliases.get(q) or us_aliases.get(qu)
     if alias_code:
         info = dict(US_CURATED.get(alias_code) or {'name': q, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'prob': 70, 'tech': '추세매매'})

@@ -68,3 +68,6 @@
 
 .live-holding-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,.7fr) auto;gap:8px;margin-top:9px;align-items:end}.live-holding-row label{font-size:11px;color:var(--muted)}.live-holding-row label span{display:block;margin:0 0 5px 2px}.live-holding-row label small{font-size:10px;color:#69aef8}.live-holding-row input{margin:0}.live-holding-row .secondary{height:42px;white-space:nowrap}
 @media(max-width:760px){.live-holding-row{grid-template-columns:1fr 1fr}.live-holding-row .secondary{grid-column:1/-1}.live-holding-row label span{font-size:11px}}
+
+/* V70.11 opportunity ranking */
+.opportunity-badge{display:inline-flex;align-items:center;padding:3px 7px;border-radius:999px;font-size:10px;font-weight:800;border:1px solid #334155;white-space:nowrap}.opportunity-badge.opp-hot{background:#3f1d0b;color:#fde68a;border-color:#f59e0b}.opportunity-badge.opp-warm{background:#1e293b;color:#7dd3fc;border-color:#0284c7}.opportunity-badge.opp-cool{background:#111827;color:#94a3b8;border-color:#334155}.budget-table td:nth-child(3) small{display:block;color:#94a3b8;margin-top:2px;font-size:10px}
