@@ -7,10 +7,11 @@ import threading
 import time
 import webbrowser
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, render_template, request
 from engine import analyze, analyze_search, fetch_fundamentals, fetch_recent_issues
 
-APP_VERSION = 'V70.14.1'
+APP_VERSION = 'V70.14.2'
 app = Flask(__name__)
 
 _cache_lock = threading.Lock()
@@ -21,6 +22,44 @@ _issue_cache = {}
 CACHE_TTL = max(0, int(os.environ.get('CACHE_TTL_SECONDS', '120')))
 MIN_REQUEST_GAP = max(0.0, float(os.environ.get('MIN_REQUEST_GAP_SECONDS', '2')))
 APP_PIN = os.environ.get('APP_PIN', '').strip()
+
+# Market clocks are calculated on the server with explicit time zones.
+# This avoids Render's UTC clock (or a browser/PWA clock quirk) being mistaken for KRX time.
+KR_HOLIDAYS_2026 = {
+    '2026-01-01','2026-02-16','2026-02-17','2026-02-18','2026-03-02',
+    '2026-05-05','2026-05-25','2026-06-03','2026-08-17',
+    '2026-09-24','2026-09-25','2026-10-05','2026-10-09','2026-12-25'
+}
+US_HOLIDAYS_2026 = {
+    '2026-01-01','2026-01-19','2026-02-16','2026-04-03','2026-05-25',
+    '2026-06-19','2026-07-03','2026-09-07','2026-11-26','2026-12-25'
+}
+
+def _market_session(market):
+    market = 'US' if str(market).upper() == 'US' else 'KR'
+    tz = ZoneInfo('America/New_York') if market == 'US' else ZoneInfo('Asia/Seoul')
+    now = datetime.now(tz)
+    date_key = now.strftime('%Y-%m-%d')
+    weekend = now.weekday() >= 5
+    holiday = date_key in (US_HOLIDAYS_2026 if market == 'US' else KR_HOLIDAYS_2026)
+    open_min, close_min = ((9 * 60 + 30), (16 * 60)) if market == 'US' else ((9 * 60), (15 * 60 + 30))
+    mins = now.hour * 60 + now.minute
+    if weekend or holiday:
+        state = 'closed'; label = '주말 휴장' if weekend else '공휴일 휴장'; is_open = False
+    elif mins < open_min:
+        state = 'pre'; label = '장전'; is_open = False
+    elif mins >= close_min:
+        state = 'after'; label = '장 마감'; is_open = False
+    else:
+        state = 'regular'; label = '정규장 거래중'; is_open = True
+    return {
+        'market': market, 'open': is_open, 'state': state, 'label': label,
+        'date': date_key, 'local_time': now.strftime('%H:%M'),
+        'timezone': 'America/New_York' if market == 'US' else 'Asia/Seoul'
+    }
+
+def _market_sessions():
+    return {'KR': _market_session('KR'), 'US': _market_session('US')}
 
 PID_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.v70.pid')
 
@@ -63,6 +102,7 @@ def health():
         'time': _now_iso(),
         'pin_required': bool(APP_PIN),
         'cache_ttl_seconds': CACHE_TTL,
+        'sessions': _market_sessions(),
     })
 
 
@@ -106,6 +146,7 @@ def api_analyze():
                     'cache_hit': True,
                     'generated_at': cached['generated_at'],
                     'version': APP_VERSION,
+                    'sessions': _market_sessions(),
                 })
 
     try:
@@ -125,6 +166,7 @@ def api_analyze():
             'cache_hit': False,
             'generated_at': generated_at,
             'version': APP_VERSION,
+            'sessions': _market_sessions(),
         })
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)[:300], 'version': APP_VERSION}), 500
@@ -158,7 +200,7 @@ def api_search():
     settings = {**defaults, **payload}
     try:
         data = analyze_search(query, settings, market_hint=market_hint)
-        return jsonify({'ok': True, **data, 'generated_at': _now_iso(), 'version': APP_VERSION})
+        return jsonify({'ok': True, **data, 'generated_at': _now_iso(), 'version': APP_VERSION, 'sessions': _market_sessions()})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)[:300], 'version': APP_VERSION}), 500
 
