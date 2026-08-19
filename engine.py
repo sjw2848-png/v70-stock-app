@@ -16,7 +16,7 @@ import yfinance as yf
 import FinanceDataReader as fdr
 
 # ---------------------------------------------------------------------
-# V70.14 PRACTICAL VALIDATION + RANK TREND + RISK SIZING WEB ENGINE
+# V78.0 PORTFOLIO RISK + LIVE DRIFT + EXTENDED OUTCOME AUDIT
 # - V69 core ideas retained
 # - no fake after-hours data
 # - US technical comparisons stay in native USD
@@ -30,33 +30,33 @@ GRADE_THRESHOLDS = {
 }
 
 KR_CURATED = {
-    '290690': {'name': '아리바이오홀딩스', 'theme': '바이오 플랫폼/아리바이오 합병 이벤트', 'target_pct': 12.0, 'prob': 79, 'tech': '추세매매'},
-    '038110': {'name': '에코플라스틱', 'theme': '차량 경량화 범퍼', 'target_pct': 9.0, 'prob': 77, 'tech': '눌림목매매'},
-    '205470': {'name': '휴마시스', 'theme': '체외진단/방역', 'target_pct': 8.0, 'prob': 60, 'tech': '뉴스매매'},
-    '001470': {'name': '삼부토건', 'theme': '건설 재건/저가주 수급', 'target_pct': 12.0, 'prob': 65, 'tech': '추세매매'},
-    '010140': {'name': '삼성중공업', 'theme': 'K-조선 대규모 수주랠리', 'target_pct': 7.0, 'prob': 84, 'tech': '돌파매매'},
-    '000270': {'name': '기아', 'theme': '주주환원/밸류업 대장주', 'target_pct': 4.0, 'prob': 87, 'tech': '종가매매'},
-    '042700': {'name': '한미반도체', 'theme': 'HBM TC본더 공급망', 'target_pct': 8.0, 'prob': 89, 'tech': '돌파매매'},
-    '196170': {'name': '알테오젠', 'theme': '바이오/기술이전 모멘텀', 'target_pct': 10.0, 'prob': 83, 'tech': '눌림목매매'},
-    '000660': {'name': 'SK하이닉스', 'theme': 'HBM/메모리', 'target_pct': 5.0, 'prob': 88, 'tech': '수급매매'},
-    '005930': {'name': '삼성전자', 'theme': '반도체/메모리', 'target_pct': 4.0, 'prob': 85, 'tech': '지지라인매매'},
-    '267260': {'name': 'HD현대일렉트릭', 'theme': '전력기기/데이터센터', 'target_pct': 8.0, 'prob': 88, 'tech': '돌파매매'},
+    '290690': {'name': '아리바이오홀딩스', 'theme': '바이오 플랫폼/아리바이오 합병 이벤트', 'target_pct': 12.0, 'tech': '추세매매'},
+    '038110': {'name': '에코플라스틱', 'theme': '차량 경량화 범퍼', 'target_pct': 9.0, 'tech': '눌림목매매'},
+    '205470': {'name': '휴마시스', 'theme': '체외진단/방역', 'target_pct': 8.0, 'tech': '뉴스매매'},
+    '001470': {'name': '삼부토건', 'theme': '건설 재건/저가주 수급', 'target_pct': 12.0, 'tech': '추세매매'},
+    '010140': {'name': '삼성중공업', 'theme': 'K-조선 대규모 수주랠리', 'target_pct': 7.0, 'tech': '돌파매매'},
+    '000270': {'name': '기아', 'theme': '주주환원/밸류업 대장주', 'target_pct': 4.0, 'tech': '종가매매'},
+    '042700': {'name': '한미반도체', 'theme': 'HBM TC본더 공급망', 'target_pct': 8.0, 'tech': '돌파매매'},
+    '196170': {'name': '알테오젠', 'theme': '바이오/기술이전 모멘텀', 'target_pct': 10.0, 'tech': '눌림목매매'},
+    '000660': {'name': 'SK하이닉스', 'theme': 'HBM/메모리', 'target_pct': 5.0, 'tech': '수급매매'},
+    '005930': {'name': '삼성전자', 'theme': '반도체/메모리', 'target_pct': 4.0, 'tech': '지지라인매매'},
+    '267260': {'name': 'HD현대일렉트릭', 'theme': '전력기기/데이터센터', 'target_pct': 8.0, 'tech': '돌파매매'},
 }
 
 US_CURATED = {
-    'NVDA': {'name': '엔비디아', 'theme': 'AI 가속기', 'target_pct': 5.0, 'prob': 89, 'tech': '돌파매매'},
-    'TSLA': {'name': '테슬라', 'theme': 'EV/FSD/로보택시', 'target_pct': 7.0, 'prob': 82, 'tech': '뉴스매매'},
-    'AAPL': {'name': '애플', 'theme': '소비자 IT/AI 생태계', 'target_pct': 4.0, 'prob': 86, 'tech': '지지라인매매'},
-    'MSFT': {'name': '마이크로소프트', 'theme': 'AI/클라우드', 'target_pct': 4.0, 'prob': 88, 'tech': '수급매매'},
-    'PLTR': {'name': '팔란티어', 'theme': 'AI 소프트웨어', 'target_pct': 8.0, 'prob': 79, 'tech': '뉴스매매'},
+    'NVDA': {'name': '엔비디아', 'theme': 'AI 가속기', 'target_pct': 5.0, 'tech': '돌파매매'},
+    'TSLA': {'name': '테슬라', 'theme': 'EV/FSD/로보택시', 'target_pct': 7.0, 'tech': '뉴스매매'},
+    'AAPL': {'name': '애플', 'theme': '소비자 IT/AI 생태계', 'target_pct': 4.0, 'tech': '지지라인매매'},
+    'MSFT': {'name': '마이크로소프트', 'theme': 'AI/클라우드', 'target_pct': 4.0, 'tech': '수급매매'},
+    'PLTR': {'name': '팔란티어', 'theme': 'AI 소프트웨어', 'target_pct': 8.0, 'tech': '뉴스매매'},
 }
 
 KR_ETFS = {
-    '069500': {'name': 'KODEX 200', 'theme': '코스피200 지수 추종', 'target_pct': 5.0, 'prob': 85, 'tech': '눌림목매매'},
-    '232080': {'name': 'TIGER 코스닥150', 'theme': '코스닥150 지수 추종', 'target_pct': 7.0, 'prob': 75, 'tech': '추세매매'},
-    '213610': {'name': 'KODEX 고배당주', 'theme': '배당/가치', 'target_pct': 4.0, 'prob': 90, 'tech': '추세매매'},
-    '360750': {'name': 'TIGER 미국S&P500', 'theme': 'S&P500 국내상장 ETF', 'target_pct': 5.5, 'prob': 87, 'tech': '추세매매'},
-    '133690': {'name': 'TIGER 미국나스닥100', 'theme': '나스닥100 국내상장 ETF', 'target_pct': 8.0, 'prob': 86, 'tech': '돌파매매'},
+    '069500': {'name': 'KODEX 200', 'theme': '코스피200 지수 추종', 'target_pct': 5.0, 'tech': '눌림목매매'},
+    '232080': {'name': 'TIGER 코스닥150', 'theme': '코스닥150 지수 추종', 'target_pct': 7.0, 'tech': '추세매매'},
+    '213610': {'name': 'KODEX 고배당주', 'theme': '배당/가치', 'target_pct': 4.0, 'tech': '추세매매'},
+    '360750': {'name': 'TIGER 미국S&P500', 'theme': 'S&P500 국내상장 ETF', 'target_pct': 5.5, 'tech': '추세매매'},
+    '133690': {'name': 'TIGER 미국나스닥100', 'theme': '나스닥100 국내상장 ETF', 'target_pct': 8.0, 'tech': '돌파매매'},
 }
 
 SECTOR_KEYWORDS = {
@@ -229,14 +229,14 @@ def calc_return(df, days):
     return float((df['Close'].iloc[-1] / df['Close'].iloc[-days-1] - 1) * 100)
 
 
-def calc_momentum(df, assumed_prob):
+def calc_momentum(df):
     if len(df) < 20:
-        return float(assumed_prob)
+        return 50.0
     r5, r20 = calc_return(df, 5), calc_return(df, 20)
     v5 = df['Volume'].iloc[-5:].mean() if 'Volume' in df.columns else 1
     v20 = df['Volume'].iloc[-20:].mean() if 'Volume' in df.columns else 1
     vr = v5 / v20 if v20 and v20 > 0 else 1
-    score = assumed_prob * 0.5 + np.clip(r5 * 2, -15, 15) + np.clip(r20 * 0.5, -10, 10) + np.clip((vr - 1) * 10, -10, 15)
+    score = 50.0 + np.clip(r5 * 2, -15, 15) + np.clip(r20 * 0.5, -10, 10) + np.clip((vr - 1) * 10, -10, 15)
     return float(np.clip(score, 0, 100))
 
 
@@ -515,7 +515,7 @@ def load_krx_top(n=60):
             name = str(r[ncol]).strip()
             if any(x in name for x in ['우B', '(우)', '스팩', '리츠', 'KODEX', 'TIGER', '인버스', '선물']):
                 continue
-            out[code] = {'name': name, 'theme': 'KRX 시가총액 상위', 'source_sector': (str(r[scol]).strip() if scol else ''), 'target_pct': 4.0, 'prob': 70, 'tech': '추세매매'}
+            out[code] = {'name': name, 'theme': 'KRX 시가총액 상위', 'source_sector': (str(r[scol]).strip() if scol else ''), 'target_pct': 4.0, 'tech': '추세매매'}
     except Exception:
         pass
     return out
@@ -541,7 +541,7 @@ def fetch_popular(max_n=20):
             except Exception:
                 chg = 0
             tech = '상따매매' if chg > 15 else ('돌파매매' if chg >= 0 else '낙주매매')
-            out[mapping[name]] = {'name': name, 'theme': f'네이버 인기종목 ({chg_text})', 'target_pct': 4.0, 'prob': 75, 'tech': tech}
+            out[mapping[name]] = {'name': name, 'theme': f'네이버 인기종목 ({chg_text})', 'target_pct': 4.0, 'tech': tech}
     except Exception:
         pass
     return out
@@ -737,32 +737,202 @@ def build_flow_proxy(df):
             'note':'가격·거래량으로 계산한 프록시이며 외국인/기관 실제 순매수 데이터가 아닙니다.'}
 
 
-def build_backtest_proxy(df):
-    """Lightweight historical similar-signal check, avoiding claims that it validates the full model."""
-    if len(df) < 70:
-        return {'trades':0,'success_rate':None,'avg_return_5d':None,'label':'백테스트 데이터 부족','note':'유사 기술신호 5거래일 후 수익률'}
-    d=df.copy().tail(180)
-    close=d['Close']
-    ma5=close.rolling(5).mean(); ma20=close.rolling(20).mean()
-    vol=d['Volume'] if 'Volume' in d.columns else pd.Series(1,index=d.index)
-    vavg=vol.rolling(20).mean()
+def _trade_cost_pct(market, side='roundtrip'):
+    """Conservative configurable proxy for fees/tax/slippage used only in validation."""
+    # Not broker-specific. KR includes a conservative sell-tax/fees/slippage allowance;
+    # US includes commissions/SEC-type fees/slippage allowance.
+    return 0.35 if str(market).upper() == 'KR' else 0.16
+
+
+def _regime_at(close, i):
+    """Classify the market/stock trend using information available at i only."""
+    if i < 60: return 'UNKNOWN'
+    w=close.iloc[:i+1]
+    c=_safe_float(w.iloc[-1],0); m20=_safe_float(w.tail(20).mean(),0); m60=_safe_float(w.tail(60).mean(),0)
+    if c > m20 > m60: return 'BULL'
+    if c < m20 < m60: return 'BEAR'
+    return 'SIDEWAYS'
+
+
+def build_backtest_proxy(df, market='KR'):
+    """V75 point-in-time audit with ATR barriers, costs and regime-aware evidence.
+
+    Each historical signal is evaluated without future information in the signal itself.
+    Exit is the first of ATR stop / ATR target / 5 trading-day time exit. This is still
+    an audit proxy, not a broker-grade portfolio backtest.
+    """
+    empty={'trades':0,'success_rate':None,'net_success_rate':None,'avg_return_5d':None,'net_avg_return_5d':None,
+           'median_return_5d':None,'profit_factor':None,'net_profit_factor':None,'max_drawdown_pct':None,
+           'expectancy_pct':None,'validation_score':0,'reliability_factor':0.35,'regime_breakdown':{},
+           'cost_assumption_pct':_trade_cost_pct(market),'downside_cvar_pct':None,'payoff_ratio':None,
+           'calibration_strength':0.0,'oos_trades':0,'oos_net_success_rate':None,'oos_avg_return':None,'oos_profit_factor':None,'oos_max_drawdown_pct':None,'oos_brier':None,'walk_forward_label':'WF 데이터 부족','walk_forward_folds':0,'wf_brier':None,'wf_calibration_gap_pct':None,'monte_carlo_p95_drawdown_pct':None,'monte_carlo_loss_probability_pct':None,'robustness_score':0,'horizon_returns':{},'label':'검증 데이터 부족'}
+    if len(df) < 120:
+        return {**empty,'note':'V75 검증: 최소 120거래일 필요'}
+    d=df.copy().tail(650)
+    close=pd.to_numeric(d['Close'],errors='coerce'); high=pd.to_numeric(d['High'],errors='coerce'); low=pd.to_numeric(d['Low'],errors='coerce')
+    vol=pd.to_numeric(d['Volume'],errors='coerce') if 'Volume' in d.columns else pd.Series(1.0,index=d.index)
+    ma5=close.rolling(5).mean(); ma20=close.rolling(20).mean(); vavg=vol.rolling(20).mean()
+    prev=close.shift(1); tr=pd.concat([(high-low),(high-prev).abs(),(low-prev).abs()],axis=1).max(axis=1); atr=tr.rolling(14).mean()
     delta=close.diff(); gain=delta.clip(lower=0).rolling(14).mean(); loss=(-delta.clip(upper=0)).rolling(14).mean()
     rsi=100-100/(1+(gain/(loss.replace(0,np.nan))))
-    signals=(close>ma20)&(ma5>ma20)&(vol>vavg*1.15)&(rsi.fillna(50)<78)
-    rets=[]
-    inds=np.where(signals.to_numpy())[0]
-    last_pick=-99
-    for i in inds:
-        if i<25 or i+5>=len(d) or i-last_pick<5: continue
-        r=float((close.iloc[i+5]/close.iloc[i]-1)*100)
-        rets.append(r); last_pick=i
-    if not rets:
-        return {'trades':0,'success_rate':None,'avg_return_5d':None,'label':'유사 신호 없음','note':'유사 기술신호 5거래일 후 수익률'}
-    sr=sum(1 for r in rets if r>0)/len(rets)*100
-    avg=float(np.mean(rets))
-    label='🟢 과거 유사신호 양호' if len(rets)>=4 and sr>=60 and avg>0 else ('🟡 과거 유사신호 혼조' if sr>=45 else '🔴 과거 유사신호 약함')
-    return {'trades':len(rets),'success_rate':round(sr,1),'avg_return_5d':round(avg,2),'label':label,
-            'note':'전체 V70.7 판정의 성과가 아니라 단순 유사 기술신호의 과거 5일 결과입니다.'}
+    signals=(close>ma20)&(ma5>ma20)&(vol>vavg*1.15)&(rsi.fillna(50).between(45,77))
+    gross=[]; net=[]; dates=[]; regimes=[]; exits=[]; last_pick=-99; cost=_trade_cost_pct(market)
+    for i in np.where(signals.fillna(False).to_numpy())[0]:
+        if i<60 or i+5>=len(d) or i-last_pick<5: continue
+        entry=_safe_float(close.iloc[i],0); a=_safe_float(atr.iloc[i],0)
+        if entry<=0 or a<=0: continue
+        # Symmetric-enough barriers avoid evaluating a signal with an arbitrary fixed D+5 only.
+        stop=entry-1.5*a; target=entry+2.0*a; exitp=_safe_float(close.iloc[i+5],0); why='TIME'
+        for j in range(i+1,i+6):
+            # If both barriers occur in one daily candle, assume stop first (conservative ambiguity handling).
+            if _safe_float(low.iloc[j],entry) <= stop:
+                exitp=stop; why='STOP'; break
+            if _safe_float(high.iloc[j],entry) >= target:
+                exitp=target; why='TARGET'; break
+        if exitp<=0: continue
+        g=(exitp/entry-1)*100; gross.append(g); net.append(g-cost); dates.append(str(pd.Timestamp(d.index[i]).date()))
+        regimes.append(_regime_at(close,i)); exits.append(why); last_pick=i
+    if not gross:
+        return {**empty,'label':'유사 신호 없음','note':'V75 시점고정 ATR 장벽 유사신호 결과'}
+    arr=np.asarray(gross,float); narr=np.asarray(net,float); wins=narr[narr>0]; losses=narr[narr<=0]
+    sr=float((arr>0).mean()*100); nsr=float((narr>0).mean()*100); avg=float(arr.mean()); navg=float(narr.mean()); med=float(np.median(narr))
+    gp=float(wins.sum()) if len(wins) else 0.; gl=abs(float(losses.sum())) if len(losses) else 0.; pf=gp/gl if gl>1e-9 else (9.99 if gp>0 else 0.)
+    avg_win=float(wins.mean()) if len(wins) else 0.; avg_loss=abs(float(losses.mean())) if len(losses) else 0.; payoff=avg_win/avg_loss if avg_loss>1e-9 else (9.99 if avg_win>0 else 0.)
+    equity=np.cumprod(1+narr/100.); peaks=np.maximum.accumulate(equity); dd=(equity/peaks-1)*100; maxdd=float(dd.min()) if len(dd) else 0.
+    tail_n=max(1,int(math.ceil(len(narr)*.20))); cvar=float(np.sort(narr)[:tail_n].mean())
+    rb={}
+    for rg in ('BULL','SIDEWAYS','BEAR'):
+        vals=narr[np.asarray(regimes)==rg]
+        if len(vals):
+            # Beta(3,3) shrinkage prevents tiny regime samples from looking certain.
+            wr=(float((vals>0).sum())+3)/(len(vals)+6)*100
+            rb[rg]={'trades':int(len(vals)),'win_rate':round(wr,1),'avg_net_return':round(float(vals.mean()),2)}
+    sample=min(35.,len(narr)/25*35); edge=float(np.clip(12+navg*12,0,30)); pfs=float(np.clip((pf-.8)*18,0,20)); dds=float(np.clip(10-abs(maxdd)*.45,0,10)); tail=float(np.clip(8+cvar*2,0,5))
+    validation=float(np.clip(sample+edge+pfs+dds+tail,0,100))
+    reliability=float(np.clip((validation/100)*(min(1,len(narr)/20))*(1 if navg>0 else .45),.20,1.0))
+    calibration=float(min(1.0,len(narr)/30.0))
+    label='🟢 비용·장벽 검증 양호' if len(narr)>=20 and validation>=70 and navg>0 else ('🟡 비용·장벽 검증 보통' if len(narr)>=8 and validation>=45 else '🔴 비용·장벽 검증 약함')
+    exit_counts={k:int(exits.count(k)) for k in ('TARGET','STOP','TIME')}
+    # V77: expanding-window walk-forward calibration. Each test block is forecast only from earlier trades.
+    wf_probs=[]; wf_y=[]; wf_ret=[]; wf_folds=0
+    min_train=8; block_size=4
+    if len(narr) >= min_train + 3:
+        for st in range(min_train, len(narr), block_size):
+            train=narr[:st]; test=narr[st:min(st+block_size,len(narr))]
+            if not len(test): break
+            # Beta(3,3) shrinkage: no future test result enters this forecast.
+            forecast=(float((train>0).sum())+3)/(len(train)+6)
+            wf_probs.extend([forecast]*len(test)); wf_y.extend((test>0).astype(float).tolist()); wf_ret.extend(test.tolist()); wf_folds+=1
+    oos=np.asarray(wf_ret,float)
+    if len(oos):
+        oos_sr=float((oos>0).mean()*100); oos_avg=float(oos.mean())
+        ow=oos[oos>0]; ol=oos[oos<=0]; og=float(ow.sum()) if len(ow) else 0.; ogl=abs(float(ol.sum())) if len(ol) else 0.
+        oos_pf=og/ogl if ogl>1e-9 else (9.99 if og>0 else 0.)
+        oe=np.cumprod(1+oos/100.); op=np.maximum.accumulate(oe); oos_dd=float(((oe/op-1)*100).min())
+        pp=np.asarray(wf_probs,float); yy=np.asarray(wf_y,float)
+        oos_brier=float(np.mean((pp-yy)**2)); cal_gap=float(abs(pp.mean()-yy.mean())*100)
+        wf='🟢 WF 양호' if len(oos)>=8 and oos_avg>0 and oos_pf>=1.15 and cal_gap<=15 else ('🟡 WF 혼조' if oos_avg>-0.2 and cal_gap<=25 else '🔴 WF 약함')
+    else:
+        oos_sr=oos_avg=oos_pf=oos_dd=oos_brier=cal_gap=None; wf='WF 표본 부족'
+    # Monte Carlo sequence-risk audit (deterministic seed for reproducible validation).
+    mc_p95_dd=mc_loss_prob=None; robustness=0.0
+    if len(narr)>=8:
+        rng=np.random.default_rng(77); dds=[]; finals=[]
+        for _ in range(1000):
+            sim=rng.permutation(narr); eq=np.cumprod(1+sim/100.); pk=np.maximum.accumulate(eq)
+            dds.append(abs(float(((eq/pk-1)*100).min()))); finals.append(float(eq[-1]-1))
+        mc_p95_dd=float(np.percentile(dds,95)); mc_loss_prob=float(np.mean(np.asarray(finals)<0)*100)
+        robustness=float(np.clip(100 - mc_p95_dd*2.2 - mc_loss_prob*.7 - (cal_gap or 25)*.6,0,100))
+    # Exact forward-close audit at D+1/D+3/D+5 for the same historical signal dates.
+    horizons={}
+    sig_idx=[i for i in np.where(signals.fillna(False).to_numpy())[0] if i>=60]
+    for h in (1,3,5):
+        vals=[]; last=-99
+        for i in sig_idx:
+            if i+h>=len(d) or i-last<5: continue
+            e=_safe_float(close.iloc[i],0); x=_safe_float(close.iloc[i+h],0)
+            if e>0 and x>0: vals.append((x/e-1)*100-cost); last=i
+        if vals:
+            va=np.asarray(vals,float); horizons[f'd{h}']={'trades':int(len(va)),'win_rate':round(float((va>0).mean()*100),1),'avg_net_return':round(float(va.mean()),2),'median_net_return':round(float(np.median(va)),2)}
+    return {'trades':int(len(arr)),'success_rate':round(sr,1),'net_success_rate':round(nsr,1),'avg_return_5d':round(avg,2),
+            'net_avg_return_5d':round(navg,2),'median_return_5d':round(med,2),'profit_factor':round(min(pf,9.99),2),
+            'net_profit_factor':round(min(pf,9.99),2),'max_drawdown_pct':round(maxdd,2),'expectancy_pct':round(navg,2),
+            'downside_cvar_pct':round(cvar,2),'payoff_ratio':round(min(payoff,9.99),2),'exit_counts':exit_counts,
+            'validation_score':round(validation,1),'reliability_factor':round(reliability,2),'calibration_strength':round(calibration,2),
+            'oos_trades':int(len(oos)),'oos_net_success_rate':None if oos_sr is None else round(oos_sr,1),'oos_avg_return':None if oos_avg is None else round(oos_avg,2),
+            'oos_profit_factor':None if oos_pf is None else round(min(oos_pf,9.99),2),'oos_max_drawdown_pct':None if oos_dd is None else round(oos_dd,2),
+            'oos_brier':None if oos_brier is None else round(oos_brier,3),'walk_forward_label':wf,'walk_forward_folds':wf_folds,'wf_brier':None if oos_brier is None else round(oos_brier,3),'wf_calibration_gap_pct':None if cal_gap is None else round(cal_gap,1),'monte_carlo_p95_drawdown_pct':None if mc_p95_dd is None else round(mc_p95_dd,2),'monte_carlo_loss_probability_pct':None if mc_loss_prob is None else round(mc_loss_prob,1),'robustness_score':round(robustness,1),'horizon_returns':horizons,
+            'regime_breakdown':rb,'cost_assumption_pct':cost,'first_signal_date':dates[0],'last_signal_date':dates[-1],'label':label,
+            'note':'V77 시점고정 검증. 수동 승률 제거, expanding-window Walk-Forward 확률검증, 1.5ATR 손절·2ATR 목표·최대 5거래일, 비용 차감, Monte Carlo 순서위험과 D+1/D+3/D+5 감사를 함께 사용합니다.'}
+
+def assess_data_quality(df, market):
+    """Score whether the OHLCV input is usable; this is a data-quality score, not investment confidence."""
+    score = 100.0
+    reasons = []
+    rows = len(df)
+    if rows < 60:
+        score -= 25; reasons.append('60거래일 미만')
+    elif rows < 120:
+        score -= 10; reasons.append('120거래일 미만')
+    required = ['Open','High','Low','Close','Volume']
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        score -= 25; reasons.append('OHLCV 일부 누락')
+    else:
+        tail = df.tail(min(rows, 60))
+        bad = ((tail['High'] < tail[['Open','Close','Low']].max(axis=1)) |
+               (tail['Low'] > tail[['Open','Close','High']].min(axis=1))).sum()
+        if bad:
+            score -= min(30, int(bad) * 10); reasons.append(f'비정상 OHLC {int(bad)}건')
+        zero_vol = int((tail['Volume'].fillna(0) <= 0).sum())
+        if zero_vol >= 5:
+            score -= 15; reasons.append(f'0 거래량 {zero_vol}건')
+    try:
+        idx = pd.Timestamp(df.index[-1])
+        if idx.tzinfo is not None:
+            idx = idx.tz_convert(None)
+        age_days = max(0, (pd.Timestamp.now().normalize() - idx.normalize()).days)
+        # Weekends/holidays make 1~3 calendar-day gaps normal for daily bars.
+        if age_days > 7:
+            score -= 40; reasons.append(f'마지막 일봉 {age_days}일 경과')
+        elif age_days > 4:
+            score -= 20; reasons.append(f'마지막 일봉 {age_days}일 경과')
+    except Exception:
+        age_days = None
+        score -= 10; reasons.append('마지막 일봉 시점 확인 불가')
+    score = float(np.clip(score, 0, 100))
+    label = '양호' if score >= 85 else ('주의' if score >= 65 else '불충분')
+    return {'score': round(score,1), 'label': label, 'reasons': reasons or ['기본 무결성 통과'], 'last_bar_age_days': age_days}
+
+
+def beta_probability_interval(backtest, prior_success=3.0, prior_failure=3.0):
+    """Approximate 90% interval for the positive-return rate using a Beta posterior."""
+    trades=max(_safe_int((backtest or {}).get('trades'),0),0)
+    sr=(backtest or {}).get('success_rate')
+    wins=(float(sr)/100.0*trades) if trades and sr is not None else 0.0
+    a=prior_success+wins; b=prior_failure+max(0.0,trades-wins)
+    mean=a/(a+b)
+    var=(a*b)/(((a+b)**2)*(a+b+1))
+    sd=math.sqrt(max(var,0.0))
+    lo=max(0.0,mean-1.645*sd); hi=min(1.0,mean+1.645*sd)
+    return round(lo*100,1), round(hi*100,1)
+
+
+def empirical_win_probability(backtest, prior=0.50, prior_weight=6):
+    """Shrink a tiny historical sample toward 50%; never treat curated metadata as a win probability."""
+    trades = max(_safe_int((backtest or {}).get('trades'), 0), 0)
+    oos_trades=max(_safe_int((backtest or {}).get('oos_trades'),0),0)
+    oos_sr=(backtest or {}).get('oos_net_success_rate')
+    if oos_trades >= 5 and oos_sr is not None:
+        observed=float(np.clip(_safe_float(oos_sr,50.0)/100.0,0.0,1.0))
+        p=(observed*oos_trades+prior*prior_weight)/(oos_trades+prior_weight)
+        return float(np.clip(p,0.35,0.68)), f'OOS 최근 {oos_trades}건을 중립 사전값으로 보정'
+    sr = (backtest or {}).get('net_success_rate')
+    if trades <= 0 or sr is None:
+        return float(prior), '유사신호 표본 부족 · 중립 50% 사용'
+    observed = float(np.clip(_safe_float(sr, 50.0) / 100.0, 0.0, 1.0))
+    p = (observed * trades + prior * prior_weight) / (trades + prior_weight)
+    return float(np.clip(p, 0.35, 0.70)), f'유사신호 {trades}건을 중립 사전값으로 보정'
 
 
 def build_split_trade_plan(entry_krw, target1_krw, target2_krw, stop1_krw, qty, tech):
@@ -1159,7 +1329,7 @@ def fetch_fundamentals(code: str, market: str):
 
 
 def diagnostic_market():
-    result = {'kospi_chg': None, 'kosdaq_chg': None, 'kospi_5d': None, 'kosdaq_5d': None, 'sp500_5d': None, 'state': '데이터 확인 중', 'guide': '지수 데이터 확인이 필요합니다.'}
+    result = {'kospi_chg': None, 'kosdaq_chg': None, 'kospi_5d': None, 'kosdaq_5d': None, 'sp500_5d': None, 'kr_state': '데이터 확인 중', 'us_state': '데이터 확인 중', 'state': '데이터 확인 중', 'guide': '지수 데이터 확인이 필요합니다.'}
     try:
         kp = fdr.DataReader('KS11').tail(10)
         kq = fdr.DataReader('KQ11').tail(10)
@@ -1170,20 +1340,24 @@ def diagnostic_market():
         if len(kq)>=6: result['kosdaq_5d']=(float(kq['Close'].iloc[-1])/float(kq['Close'].iloc[-6])-1)*100
         mn, mx = min(kpchg, kqchg), max(kpchg, kqchg)
         if mn <= -3:
-            result['state'], result['guide'] = '🚨 급락장', '신규 진입을 줄이고 리스크를 낮추는 구간으로 분류합니다.'
+            result['kr_state'], result['guide'] = '🚨 급락장', '신규 진입을 줄이고 리스크를 낮추는 구간으로 분류합니다.'
         elif mn <= -1:
-            result['state'], result['guide'] = '🔴 약세장', '돌파 추격보다 보수적인 진입이 유리한 구간으로 분류합니다.'
+            result['kr_state'], result['guide'] = '🔴 약세장', '돌파 추격보다 보수적인 진입이 유리한 구간으로 분류합니다.'
         elif mx >= 1.5:
-            result['state'], result['guide'] = '🟢 강세장', '시장 모멘텀이 강한 구간입니다. 그래도 종목별 손절 기준은 유지하세요.'
+            result['kr_state'], result['guide'] = '🟢 강세장', '시장 모멘텀이 강한 구간입니다. 그래도 종목별 손절 기준은 유지하세요.'
         else:
-            result['state'], result['guide'] = '🟡 혼조세', '종목별 신호 차이가 큰 구간입니다. 선별 접근이 필요합니다.'
+            result['kr_state'], result['guide'] = '🟡 혼조세', '종목별 신호 차이가 큰 구간입니다. 선별 접근이 필요합니다.'
     except Exception as e:
         result['guide'] = f'지수 수신 실패: {str(e)[:80]}'
+    result['state'] = result['kr_state']  # backward-compatible display field
     try:
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             sp=yf.download('SPY',period='10d',progress=False,auto_adjust=False,threads=False)
         if isinstance(sp.columns,pd.MultiIndex): sp.columns=sp.columns.droplevel(1)
         if sp is not None and len(sp)>=6: result['sp500_5d']=(float(sp['Close'].dropna().iloc[-1])/float(sp['Close'].dropna().iloc[-6])-1)*100
+        r5=result.get('sp500_5d')
+        if r5 is not None:
+            result['us_state'] = '🚨 급락장' if r5 <= -6 else ('🔴 약세장' if r5 <= -2 else ('🟢 강세장' if r5 >= 2 else '🟡 혼조세'))
     except Exception:
         pass
     return result
@@ -1291,8 +1465,12 @@ def analyze_one(code, info, market, settings, fx, market_state):
         s1, pp, r1 = calc_pivots(df)
         s1, pp, r1 = s1 or close * .97, pp or close, r1 or close * 1.03
 
-        prob = float(info.get('prob', 70))
-        momentum = calc_momentum(df, prob)
+        data_quality = assess_data_quality(df, market)
+        backtest = build_backtest_proxy(df, market)
+        win_rate, win_rate_note = empirical_win_probability(backtest)
+        prob_lo, prob_hi = beta_probability_interval(backtest)
+        prob = win_rate * 100.0
+        momentum = calc_momentum(df)
         if macd_bull:
             momentum += 10
         if bb_break:
@@ -1365,6 +1543,13 @@ def analyze_one(code, info, market, settings, fx, market_state):
             sizing_limiter = '예산·허용손실 동시 제한'
         strict_qty = qty_capacity if grade != 'C' and kelly > 0 else 0
         qty = strict_qty
+        # Low-quality/stale inputs must never receive a full-size new position.
+        quality_factor = 1.0 if data_quality['score'] >= 85 else (0.5 if data_quality['score'] >= 65 else 0.0)
+        # V72: historical validation may reduce size, but never upgrades a weak data-quality gate.
+        validation_score = _safe_float(backtest.get('validation_score'), 0.0)
+        validation_trades = _safe_int(backtest.get('trades'), 0)
+        validation_factor = _safe_float(backtest.get('reliability_factor'), 0.5)
+        quality_factor = min(quality_factor, validation_factor)
 
         vol = _safe_float(df['Volume'].iloc[-1], 0)
         avg_vol20 = _safe_float(df['Volume'].tail(20).mean(), 0) if 'Volume' in df.columns else 0
@@ -1388,7 +1573,6 @@ def analyze_one(code, info, market, settings, fx, market_state):
             close, high20, rvol, trading_value_krw, recent5, bb_break, info.get('theme', '')
         )
         flow_proxy = build_flow_proxy(df)
-        backtest = build_backtest_proxy(df)
 
         decision = {
             'S': '최우선 후보', 'A': '강한 후보', 'B': '분할 검토', 'C': '관망'
@@ -1428,7 +1612,10 @@ def analyze_one(code, info, market, settings, fx, market_state):
             and qty_capacity > 0 and opportunity_score >= opp_cut
             and rrr >= opp_rrr_floor and momentum >= opp_mom_floor
         )
-        if safety['hard_block'] and held_price <= 0:
+        if data_quality['score'] < 65 and held_price <= 0:
+            qty = 0
+            decision = '데이터 품질 부족으로 신규진입 보류'
+        elif safety['hard_block'] and held_price <= 0:
             qty = 0
             decision = '안전장치로 신규진입 보류'
         elif opportunity_eligible:
@@ -1437,6 +1624,9 @@ def analyze_one(code, info, market, settings, fx, market_state):
                 decision = '기회형 소액 후보'
             elif grade == 'B':
                 decision = '분할 매수 후보'
+        if held_price <= 0 and 0 < quality_factor < 1.0 and qty > 0:
+            qty = max(1, int(qty * quality_factor))
+            decision += ' · 데이터품질로 수량 축소'
         invested = qty * entry_krw
         expected_profit = qty * (target1 - entry) * krw_mult
         expected_loss = qty * (stop1 - entry) * krw_mult
@@ -1480,7 +1670,10 @@ def analyze_one(code, info, market, settings, fx, market_state):
             'momentum': round(momentum, 1),
             'rrr': round(rrr, 2),
             'kelly_pct': round(kelly * 100, 1),
-            'assumed_win_rate': round(prob, 1),
+            'estimated_win_rate': round(prob, 1),
+            'estimated_win_rate_90pct_range': [prob_lo, prob_hi],
+            'win_rate_note': win_rate_note,
+            'assumed_win_rate': round(prob, 1),  # compatibility: now empirical/shrunk, not manually assumed
             'atr_pct': round(atr_pct, 2),
             'rvol': round(rvol, 2),
             'rvol_raw': round(rvol_raw, 2),
@@ -1520,6 +1713,9 @@ def analyze_one(code, info, market, settings, fx, market_state):
             'attention_reasons': attention_reasons,
             'flow_proxy': flow_proxy,
             'backtest': backtest,
+            'data_quality': data_quality,
+            'data_quality_position_factor': quality_factor,
+            'validation_position_factor': validation_factor,
             'split_plan': split_plan,
             'buy_time': timing['buy_time'],
             'buy_rule': timing['buy_rule'],
@@ -1541,7 +1737,7 @@ def analyze_one(code, info, market, settings, fx, market_state):
             **safety,
             'after_hours': None,
             'market_regime': market_state,
-            'data_note': '일봉 기반 기술지표. 장중 거래량은 경과시간으로 보정한 RVOL을 사용합니다. 시간외 가격은 제공하지 않으며 수급은 가격·거래량 프록시입니다.',
+            'data_note': '일봉 기반 기술지표. V75는 시점고정 ATR 목표/손절 장벽, 거래비용 프록시, 국면별 보정표본을 사용합니다. 기대수익과 추정승률은 과거 유사신호 기반 추정치이며 미래 수익을 보장하지 않습니다.',
         }
     except Exception as e:
         return {
@@ -1571,7 +1767,7 @@ def parse_held(text: str):
         # Alphabetic ticker => US holding.
         if any(ch.isalpha() for ch in key) and key not in mapping:
             code = key.upper().replace(' ', '')
-            info = dict(US_CURATED.get(code) or {'name': code, 'theme': '보유/검색 종목', 'target_pct': 4.0, 'prob': 60, 'tech': '추세매매'})
+            info = dict(US_CURATED.get(code) or {'name': code, 'theme': '보유/검색 종목', 'target_pct': 4.0, 'tech': '추세매매'})
             info.update({'theme':'보유/검색 종목', 'my_price': price, 'held_qty': qty})
             result.append((code, info, 'US'))
             continue
@@ -1581,7 +1777,7 @@ def parse_held(text: str):
         elif key in mapping:
             code, name = mapping[key], key
         if code:
-            info = dict(KR_CURATED.get(code) or KR_ETFS.get(code) or {'name':name, 'theme':'보유/검색 종목', 'target_pct':4.0, 'prob':60, 'tech':'추세매매'})
+            info = dict(KR_CURATED.get(code) or KR_ETFS.get(code) or {'name':name, 'theme':'보유/검색 종목', 'target_pct':4.0, 'tech':'추세매매'})
             info.update({'name': info.get('name') or name, 'theme':'보유/검색 종목', 'my_price':price, 'held_qty':qty})
             market = 'ETF' if code in KR_ETFS else 'KR'
             result.append((code, info, market))
@@ -1602,6 +1798,49 @@ def build_universe(mode='curated', top_n=60):
         kr = dict(KR_CURATED)
     return kr
 
+
+
+def build_portfolio_risk_engine(ranked, settings):
+    """V78 account-level guardrail: cap aggregate planned stop-risk and sector concentration.
+    It only reduces sizes; it never promotes a candidate or increases quantity.
+    """
+    budget=max(_safe_float(settings.get('budget'),0),0)
+    risk_pct=max(_safe_float(settings.get('risk_pct'),1.0),0.1)
+    account_risk_cap=budget*risk_pct/100.0
+    portfolio_cap=account_risk_cap*2.5  # simultaneous new-position stop-risk ceiling
+    sector_cap=0.35
+    used_risk=0.0; sector_value={}; adjustments=[]
+    candidates=[x for x in ranked if x.get('opportunity_eligible') and x.get('qty',0)>0]
+    for x in candidates:
+        old=int(x.get('qty',0)); qty=old
+        entry=max(_safe_float(x.get('entry_krw'),0),1)
+        risk_ps=max(entry-_safe_float(x.get('stop1_krw'),entry),0)
+        sec=str(x.get('sector') or x.get('sector_major') or '기타')
+        # Remaining aggregate stop-risk.
+        if risk_ps>0 and portfolio_cap>0:
+            qty=min(qty, max(0,int((portfolio_cap-used_risk)//risk_ps)))
+        # Sector notional cap against total account budget.
+        if budget>0:
+            remaining=max(0,budget*sector_cap-sector_value.get(sec,0.0))
+            qty=min(qty,max(0,int(remaining//entry)))
+        if qty<old:
+            x['qty']=qty
+            x['portfolio_adjusted']=True
+            x['portfolio_original_qty']=old
+            x['decision']=str(x.get('decision',''))+' · 포트폴리오 위험으로 수량 축소'
+            adjustments.append({'code':x.get('code'),'name':x.get('name'),'from_qty':old,'to_qty':qty,'sector':sec})
+        used_risk += qty*risk_ps
+        sector_value[sec]=sector_value.get(sec,0.0)+qty*entry
+    return {
+        'account_risk_cap_krw':_safe_int(account_risk_cap),
+        'new_position_risk_cap_krw':_safe_int(portfolio_cap),
+        'planned_new_risk_krw':_safe_int(used_risk),
+        'risk_utilization_pct':round(used_risk/portfolio_cap*100,1) if portfolio_cap else 0.0,
+        'sector_notional_cap_pct':round(sector_cap*100),
+        'sector_exposure_krw':{k:_safe_int(v) for k,v in sorted(sector_value.items(),key=lambda z:z[1],reverse=True)},
+        'adjustments':adjustments,
+        'note':'V78 계좌 위험 가드레일. 개별 신호를 강화하지 않고 동시 손절위험·섹터 집중 시 수량만 축소합니다.'
+    }
 
 def analyze(settings: Dict[str, Any]):
     started = time.time()
@@ -1639,7 +1878,7 @@ def analyze(settings: Dict[str, Any]):
     results = []
     workers = 6 if len(tasks) <= 50 else 8
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = [ex.submit(analyze_one, c, i, m, settings, fx, market['state']) for c, i, m in tasks]
+        futs = [ex.submit(analyze_one, c, i, m, settings, fx, market.get('us_state') if m == 'US' else market.get('kr_state', market.get('state'))) for c, i, m in tasks]
         for fut in concurrent.futures.as_completed(futs):
             results.append(fut.result())
 
@@ -1667,6 +1906,11 @@ def analyze(settings: Dict[str, Any]):
         _safe_float(x.get('rrr'), 0)
     ), reverse=True)
 
+    portfolio_risk = build_portfolio_risk_engine(ranked, settings)
+    # portfolio sizing may turn previously buyable names into zero-quantity watch items
+    buyable = [x for x in ranked if x.get('opportunity_eligible') and x.get('qty', 0) > 0]
+    individual_buyable=[x for x in individual_ranked if x.get('opportunity_eligible') and x.get('qty',0)>0]
+    etf_buyable=[x for x in etf_ranked if x.get('opportunity_eligible') and x.get('qty',0)>0]
     sector_analysis = build_sector_analytics(valid)
     scalp_candidates = build_scalp_candidates(valid, settings, limit=2)
     summary = {
@@ -1684,7 +1928,7 @@ def analyze(settings: Dict[str, Any]):
         'elapsed_sec': round(time.time() - started, 1),
         'usdkrw': round(fx, 2),
     }
-    return {'market': market, 'summary': summary, 'sector_analysis': sector_analysis, 'scalp_candidates': scalp_candidates, 'results': results}
+    return {'market': market, 'summary': summary, 'sector_analysis': sector_analysis, 'portfolio_risk': portfolio_risk, 'scalp_candidates': scalp_candidates, 'results': results}
 
 # ---------------------------------------------------------------------
 # V70.4 on-demand symbol search
@@ -1717,7 +1961,7 @@ def _resolve_search_query(query: str, market_hint: str = 'AUTO'):
 
     alias_code = us_aliases.get(q) or us_aliases.get(qu)
     if alias_code:
-        info = dict(US_CURATED.get(alias_code) or {'name': q, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'prob': 70, 'tech': '추세매매'})
+        info = dict(US_CURATED.get(alias_code) or {'name': q, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'tech': '추세매매'})
         return alias_code, info, 'US'
 
     # Known curated Korean/US names first.
@@ -1731,21 +1975,21 @@ def _resolve_search_query(query: str, market_hint: str = 'AUTO'):
 
     if hint == 'US':
         code = qu.replace(' ', '')
-        return code, {'name': code, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'prob': 70, 'tech': '추세매매'}, 'US'
+        return code, {'name': code, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'tech': '추세매매'}, 'US'
 
     mapping = get_krx_mapping()
     if q.isdigit():
         code = q.zfill(6)
         name = next((n for n, c in mapping.items() if c == code), code)
         market = 'ETF' if code in KR_ETFS else 'KR'
-        info = dict(KR_ETFS.get(code) or KR_CURATED.get(code) or {'name': name, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'prob': 70, 'tech': '추세매매'})
+        info = dict(KR_ETFS.get(code) or KR_CURATED.get(code) or {'name': name, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'tech': '추세매매'})
         info['name'] = info.get('name') or name
         return code, info, market
 
     if q in mapping:
         code = mapping[q]
         market = 'ETF' if code in KR_ETFS else 'KR'
-        info = dict(KR_ETFS.get(code) or KR_CURATED.get(code) or {'name': q, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'prob': 70, 'tech': '추세매매'})
+        info = dict(KR_ETFS.get(code) or KR_CURATED.get(code) or {'name': q, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'tech': '추세매매'})
         return code, info, market
 
     # Korean partial-name match: prefer startswith, then shortest matching name.
@@ -1754,13 +1998,13 @@ def _resolve_search_query(query: str, market_hint: str = 'AUTO'):
         matches.sort(key=lambda x: (0 if x[0].lower().startswith(q.lower()) else 1, len(x[0]), x[0]))
         name, code = matches[0]
         market = 'ETF' if code in KR_ETFS else 'KR'
-        info = dict(KR_ETFS.get(code) or KR_CURATED.get(code) or {'name': name, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'prob': 70, 'tech': '추세매매'})
+        info = dict(KR_ETFS.get(code) or KR_CURATED.get(code) or {'name': name, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'tech': '추세매매'})
         return code, info, market
 
     # AUTO fallback: alphabetic ticker -> US.
     if all(ch.isalnum() or ch in '.-' for ch in qu) and any(ch.isalpha() for ch in qu):
         code = qu.replace(' ', '')
-        return code, {'name': code, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'prob': 70, 'tech': '추세매매'}, 'US'
+        return code, {'name': code, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'tech': '추세매매'}, 'US'
 
     raise ValueError(f'종목을 찾지 못했습니다: {q}')
 
@@ -1781,7 +2025,7 @@ def analyze_search(query: str, settings: Dict[str, Any], market_hint: str = 'AUT
         info['holding_input_currency'] = 'USD' if market == 'US' else 'KRW'
 
     market_info = diagnostic_market()
-    item = analyze_one(code, info, market, settings, fx, market_info['state'])
+    item = analyze_one(code, info, market, settings, fx, market_info.get('us_state') if market == 'US' else market_info.get('kr_state', market_info.get('state')))
     if item.get('ok') and search_avg_price > 0:
         item['holding_input_price_native'] = round(search_avg_price, 4)
         item['holding_input_currency'] = 'USD' if market == 'US' else 'KRW'

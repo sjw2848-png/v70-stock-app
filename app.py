@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, render_template, request
 from engine import analyze, analyze_search, fetch_fundamentals, fetch_recent_issues
 
-APP_VERSION = 'V70.14.2'
+APP_VERSION = 'V76.0.0'
 app = Flask(__name__)
 
 _cache_lock = threading.Lock()
@@ -61,7 +61,7 @@ def _market_session(market):
 def _market_sessions():
     return {'KR': _market_session('KR'), 'US': _market_session('US')}
 
-PID_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.v70.pid')
+PID_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.v76.pid')
 
 def _cleanup_pid():
     try:
@@ -106,6 +106,33 @@ def health():
     })
 
 
+def _validated_settings(payload):
+    if not isinstance(payload, dict):
+        raise ValueError('요청 형식이 올바르지 않습니다.')
+    defaults = {
+        'budget': 5_000_000, 'trade_budget': 300_000, 'long_budget': 1_000_000,
+        'risk_pct': 1.0, 'stop_pct': 3.0, 'min_rrr': 1.5,
+        'trust_mode': 'balanced', 'mode': 'smart', 'top_n': 60, 'held': '',
+        'search_avg_price': 0, 'search_held_qty': 0,
+    }
+    out = {**defaults, **payload}
+    def num(key, lo, hi):
+        try: v = float(out.get(key, defaults[key]))
+        except (TypeError, ValueError): raise ValueError(f'{key} 값이 숫자가 아닙니다.')
+        if not (lo <= v <= hi): raise ValueError(f'{key} 값은 {lo}~{hi} 범위여야 합니다.')
+        out[key] = v
+    num('budget', 0, 10_000_000_000); num('trade_budget', 0, 10_000_000_000)
+    num('long_budget', 0, 10_000_000_000); num('risk_pct', 0, 10)
+    num('stop_pct', 0.2, 30); num('min_rrr', 0.5, 10)
+    num('search_avg_price', 0, 10_000_000_000); num('search_held_qty', 0, 10_000_000)
+    try: out['top_n'] = max(10, min(int(float(out.get('top_n', 60))), 150))
+    except (TypeError, ValueError): raise ValueError('top_n 값이 올바르지 않습니다.')
+    if out.get('trust_mode') not in {'conservative','balanced','aggressive'}: out['trust_mode']='balanced'
+    if out.get('mode') not in {'curated','popular','top','smart','mixed'}: out['mode']='smart'
+    out['held'] = str(out.get('held',''))[:2000]
+    return out
+
+
 @app.post('/api/analyze')
 def api_analyze():
     if not _authorized():
@@ -119,21 +146,10 @@ def api_analyze():
     _last_request_by_ip[ip] = now
 
     payload = request.get_json(silent=True) or {}
-    defaults = {
-        'budget': 5_000_000,
-        'trade_budget': 300_000,
-        'long_budget': 1_000_000,
-        'risk_pct': 1.0,
-        'stop_pct': 3.0,
-        'min_rrr': 1.5,
-        'trust_mode': 'balanced',
-        'mode': 'smart',
-        'top_n': 60,
-        'held': '',
-        'search_avg_price': 0,
-        'search_held_qty': 0,
-    }
-    settings = {**defaults, **payload}
+    try:
+        settings = _validated_settings(payload)
+    except ValueError as e:
+        return jsonify({'ok': False, 'error': str(e), 'code': 'INVALID_SETTINGS'}), 400
     key = _payload_hash(settings)
 
     if CACHE_TTL:
@@ -183,21 +199,10 @@ def api_search():
     if not query:
         return jsonify({'ok': False, 'error': '종목명 또는 종목코드를 입력하세요.'}), 400
 
-    defaults = {
-        'budget': 5_000_000,
-        'trade_budget': 300_000,
-        'long_budget': 1_000_000,
-        'risk_pct': 1.0,
-        'stop_pct': 3.0,
-        'min_rrr': 1.5,
-        'trust_mode': 'balanced',
-        'mode': 'smart',
-        'top_n': 60,
-        'held': '',
-        'search_avg_price': 0,
-        'search_held_qty': 0,
-    }
-    settings = {**defaults, **payload}
+    try:
+        settings = _validated_settings(payload)
+    except ValueError as e:
+        return jsonify({'ok': False, 'error': str(e), 'code': 'INVALID_SETTINGS'}), 400
     try:
         data = analyze_search(query, settings, market_hint=market_hint)
         return jsonify({'ok': True, **data, 'generated_at': _now_iso(), 'version': APP_VERSION, 'sessions': _market_sessions()})
