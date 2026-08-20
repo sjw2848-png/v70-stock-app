@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#07101e" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="V78.1.0 주식판" />
-  <title>V78.1.0 실전 검증 종목선별판</title>
+  <meta name="apple-mobile-web-app-title" content="V78.6.1 주식판" />
+  <title>V78.6.1 실전 검증 종목선별판</title>
   <link rel="manifest" href="/static/manifest.json" />
   <link rel="icon" href="/static/icon-192.png" />
   <link rel="apple-touch-icon" href="/static/icon-192.png" />
@@ -16,7 +16,7 @@
 <body>
   <header class="topbar">
     <div class="brand-wrap">
-      <div class="eyebrow">V78.1.0 · 강세테마·적립식·위험관리 통합판</div>
+      <div class="eyebrow">V78.6.1 · 강세테마·적립식·위험관리 통합판</div>
       <h1>오늘 사도 돼?</h1>
       <p id="connectionText">열자마자 YES · WAIT · NO만 먼저 확인</p>
     </div>
@@ -89,12 +89,28 @@
         <label>수량<input id="portfolioQty" type="number" min="0" step="any" placeholder="소수점 수량도 가능" /></label>
         <label>하루 모으기 금액<input id="portfolioDaily" type="number" min="0" step="100" placeholder="예: 1000원" /></label>
         <label>모으기 시작일<input id="portfolioAccumStart" type="date" /></label>
+        <label>모으기 평가기간<select id="portfolioHorizon"><option value="12">12개월</option><option value="24" selected>24개월</option><option value="36">36개월</option><option value="60">60개월</option></select></label>
+        <label>종목별 목표금액<input id="portfolioTarget" type="number" min="0" step="10000" placeholder="예: 1000000원" /></label>
         <button id="addHoldingBtn" class="primary" type="button">+ 보유주 추가</button><button id="addAccumBtn" class="secondary" type="button">🌱 매일 모으기 추가</button><button id="addWatchBtn" class="secondary" type="button">☆ 관심종목 추가</button>
       </div>
       <div class="portfolio-summary" id="portfolioSummary">저장한 종목이 없습니다.</div>
       <div id="portfolioStatus" class="status compact"></div>
+      <div class="portfolio-sync-tools private-account-box">
+        <label>👤 개인 계정 ID<input id="accountId" type="text" autocomplete="username" maxlength="40" placeholder="예: genju-stock-78" /></label>
+        <label>🔑 개인 비밀번호<input id="accountPassword" type="password" autocomplete="current-password" minlength="8" placeholder="8자 이상" /></label>
+        <button id="generateAccountBtn" class="ghost" type="button">ID 자동생성</button>
+        <button id="createAccountBtn" class="secondary" type="button">새 개인계정 만들기</button>
+        <button id="connectAccountBtn" class="primary" type="button">내 계정 연결</button>
+        <button id="changeAccountIdBtn" class="ghost" type="button">개인 ID 변경</button>
+        <button id="changePasswordBtn" class="ghost" type="button">비밀번호 변경</button>
+        <button id="logoutAccountBtn" class="ghost" type="button">로그아웃</button>
+        <button id="importLegacyBtn" class="ghost" type="button">기존 내 자료 가져오기</button>
+        <button id="resetMyDataBtn" class="ghost" type="button">이 계정 자료 초기화</button>
+      </div>
+      <div id="accountStatus" class="status compact">🔒 개인계정을 연결하면 내 보유종목만 표시됩니다.</div>
+      <p class="quality-note">같은 서버를 여러 사람이 사용해도 <b>개인 계정 ID + 비밀번호</b>가 서로 다르면 보유종목·평단·모으기·관심종목 화면도 완전히 분리됩니다. 내 휴대폰과 PC에는 같은 계정으로 연결하세요. 다른 사람에게는 새 계정을 만들어 사용하게 하면 내 자산정보가 보이지 않습니다.</p>
       <div id="portfolioList" class="portfolio-list"></div>
-      <p class="quality-note">보유주 평단·수량과 매일 모으기 금액·시작일은 서버와 기기에 동기화됩니다. 종목명 검색 시 정확한 주식·ETF를 선택해 저장하세요. ‘매수/매도 시점’은 현재 데이터 기반 재평가이며 주문을 자동 실행하지 않습니다. 관심종목은 평단·수량 없이 추적합니다.</p>
+      <p class="quality-note">보유주 평단·수량과 매일 모으기 금액·시작일·평가기간·목표금액은 서버와 기기에 동기화됩니다. 종목명 검색 시 정확한 주식·ETF를 선택해 저장하세요. ‘매수/매도 시점’은 현재 데이터 기반 재평가이며 주문을 자동 실행하지 않습니다. 관심종목은 평단·수량 없이 추적합니다.</p>
     </section>
 
     <section class="verdict-card card" id="topPick" hidden>
@@ -195,7 +211,7 @@
     </section>
 
     <section class="performance-section card" id="feedbackSection">
-      <div class="section-title-row"><div><b>🧠 V78.2.1 정밀 검증·성과 피드백 엔진</b><span>D+5 실제 관찰결과를 전략·시장국면·추천유형별로 분해하고 추정확률의 보정오차를 확인합니다</span></div></div>
+      <div class="section-title-row"><div><b>🧠 V78.6.1 정밀 검증·성과 피드백 엔진</b><span>D+5 실제 관찰결과를 전략·시장국면·추천유형별로 분해하고 추정확률의 보정오차를 확인합니다</span></div></div>
       <div id="feedbackEngine"><div class="quality-empty">D+5 완료 기록이 쌓이면 자동 분석합니다.</div></div>
       <p class="quality-note">※ 브라우저 로컬 기록 기반 감사 기능입니다. 미래 성과를 보장하거나 자동으로 공격성을 높이지 않습니다.</p>
     </section>

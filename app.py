@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, render_template, request
 from engine import analyze, analyze_search, search_instruments, fetch_fundamentals, fetch_recent_issues
 
-APP_VERSION = 'V78.4.3'
+APP_VERSION = 'V78.6.1'
 app = Flask(__name__)
 
 _cache_lock = threading.Lock()
@@ -27,12 +27,58 @@ APP_PIN = os.environ.get('APP_PIN', '').strip()
 DATA_DIR = os.environ.get('DATA_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data'))
 os.makedirs(DATA_DIR, exist_ok=True)
 PORTFOLIO_FILE = os.path.join(DATA_DIR, 'portfolio.json')
+ACCOUNTS_FILE = os.path.join(DATA_DIR, 'accounts.json')
 _portfolio_lock = threading.Lock()
+_account_lock = threading.Lock()
 
-def _portfolio_owner():
-    # The deployment PIN is also the private sync namespace. Never store the PIN itself.
-    pin = APP_PIN or 'local-default'
-    return hashlib.sha256(pin.encode('utf-8')).hexdigest()[:24]
+def _normalize_account_id(value):
+    raw = str(value or '').strip().lower()
+    return ''.join(ch for ch in raw if ch.isalnum() or ch in {'-','_','.'})[:40]
+
+def _read_accounts():
+    try:
+        with open(ACCOUNTS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+def _write_accounts(data):
+    tmp = ACCOUNTS_FILE + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, separators=(',', ':'))
+    os.replace(tmp, ACCOUNTS_FILE)
+
+def _password_hash(password, salt_hex, iterations=180000):
+    return hashlib.pbkdf2_hmac('sha256', str(password).encode('utf-8'), bytes.fromhex(salt_hex), iterations).hex()
+
+def _account_auth():
+    account_id = _normalize_account_id(request.headers.get('X-Account-ID'))
+    password = str(request.headers.get('X-Account-Password') or '')
+    if not account_id or not password:
+        return None, '개인 계정 ID와 비밀번호가 필요합니다.'
+    with _account_lock:
+        accounts = _read_accounts()
+        rec = accounts.get(account_id)
+    if not isinstance(rec, dict):
+        return None, '등록되지 않은 개인 계정입니다.'
+    salt = str(rec.get('salt') or '')
+    expected = str(rec.get('password_hash') or '')
+    try:
+        actual = _password_hash(password, salt, int(rec.get('iterations') or 180000))
+    except Exception:
+        return None, '개인 계정 인증정보가 손상되었습니다.'
+    import hmac
+    if not hmac.compare_digest(actual, expected):
+        return None, '개인 계정 비밀번호가 올바르지 않습니다.'
+    owner = hashlib.sha256(('account:' + account_id).encode('utf-8')).hexdigest()[:32]
+    return owner, None
+
+def _portfolio_owner_legacy():
+    # V78.5 이하의 기존 동기화 공간. 신규 개인계정으로 이관할 때만 사용합니다.
+    sync_key = (request.headers.get('X-Sync-Key') or '').strip()
+    seed = ('sync:' + sync_key) if sync_key else ('legacy:' + (APP_PIN or 'local-default'))
+    return hashlib.sha256(seed.encode('utf-8')).hexdigest()[:24]
 
 def _read_portfolio_store():
     try:
@@ -250,13 +296,117 @@ def api_symbols():
     except Exception as e:
         return jsonify({'ok':False,'error':str(e)[:200],'items':[],'version':APP_VERSION}),500
 
+@app.post('/api/account/register')
+def api_account_register():
+    if not _authorized():
+        return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.'}), 401
+    payload = request.get_json(silent=True) or {}
+    account_id = _normalize_account_id(payload.get('account_id'))
+    password = str(payload.get('password') or '')
+    if len(account_id) < 6:
+        return jsonify({'ok': False, 'error': '개인 계정 ID는 영문/숫자 기준 6자 이상으로 만들어주세요.'}), 400
+    if len(password) < 8:
+        return jsonify({'ok': False, 'error': '개인 계정 비밀번호는 8자 이상으로 만들어주세요.'}), 400
+    with _account_lock:
+        accounts = _read_accounts()
+        if account_id in accounts:
+            return jsonify({'ok': False, 'error': '이미 사용 중인 개인 계정 ID입니다.'}), 409
+        salt = os.urandom(16).hex(); iterations = 180000
+        accounts[account_id] = {
+            'salt': salt, 'iterations': iterations,
+            'password_hash': _password_hash(password, salt, iterations),
+            'created_at': _now_iso()
+        }
+        _write_accounts(accounts)
+    return jsonify({'ok': True, 'account_id': account_id, 'version': APP_VERSION})
+
+@app.get('/api/account/status')
+def api_account_status():
+    if not _authorized():
+        return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.'}), 401
+    owner, error = _account_auth()
+    if error:
+        return jsonify({'ok': False, 'error': error}), 401
+    return jsonify({'ok': True, 'account_id': _normalize_account_id(request.headers.get('X-Account-ID')), 'version': APP_VERSION})
+
+@app.post('/api/account/change-id')
+def api_account_change_id():
+    if not _authorized():
+        return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.'}), 401
+    old_id = _normalize_account_id(request.headers.get('X-Account-ID'))
+    owner, error = _account_auth()
+    if error:
+        return jsonify({'ok': False, 'error': error}), 401
+    payload = request.get_json(silent=True) or {}
+    new_id = _normalize_account_id(payload.get('new_account_id'))
+    if len(new_id) < 6:
+        return jsonify({'ok': False, 'error': '새 개인 계정 ID는 6자 이상이어야 합니다.'}), 400
+    if new_id == old_id:
+        return jsonify({'ok': True, 'account_id': old_id, 'version': APP_VERSION})
+    new_owner = hashlib.sha256(('account:' + new_id).encode('utf-8')).hexdigest()[:32]
+    # Account record and portfolio ownership are moved together. If the portfolio write fails, roll back the account file.
+    with _account_lock:
+        accounts = _read_accounts()
+        rec = accounts.get(old_id)
+        if not isinstance(rec, dict):
+            return jsonify({'ok': False, 'error': '현재 개인 계정을 찾을 수 없습니다.'}), 404
+        if new_id in accounts:
+            return jsonify({'ok': False, 'error': '이미 사용 중인 개인 계정 ID입니다.'}), 409
+        original_accounts = dict(accounts)
+        moved = dict(rec); moved['updated_at'] = _now_iso(); moved['renamed_from'] = old_id
+        accounts[new_id] = moved
+        del accounts[old_id]
+        try:
+            _write_accounts(accounts)
+            with _portfolio_lock:
+                store = _read_portfolio_store()
+                if new_owner in store and new_owner != owner:
+                    raise ValueError('새 ID 저장공간이 이미 사용 중입니다.')
+                if owner in store:
+                    store[new_owner] = store.pop(owner)
+                    _write_portfolio_store(store)
+        except Exception as exc:
+            try:
+                _write_accounts(original_accounts)
+            except Exception:
+                pass
+            return jsonify({'ok': False, 'error': f'ID 변경 중 저장 오류가 발생했습니다: {str(exc)[:120]}'}), 500
+    return jsonify({'ok': True, 'account_id': new_id, 'version': APP_VERSION})
+
+@app.post('/api/account/change-password')
+def api_account_change_password():
+    if not _authorized():
+        return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.'}), 401
+    _owner, error = _account_auth()
+    if error:
+        return jsonify({'ok': False, 'error': error}), 401
+    account_id = _normalize_account_id(request.headers.get('X-Account-ID'))
+    payload = request.get_json(silent=True) or {}
+    new_password = str(payload.get('new_password') or '')
+    if len(new_password) < 8:
+        return jsonify({'ok': False, 'error': '새 비밀번호는 8자 이상이어야 합니다.'}), 400
+    with _account_lock:
+        accounts = _read_accounts()
+        rec = accounts.get(account_id)
+        if not isinstance(rec, dict):
+            return jsonify({'ok': False, 'error': '현재 개인 계정을 찾을 수 없습니다.'}), 404
+        salt = os.urandom(16).hex(); iterations = 210000
+        rec = dict(rec)
+        rec.update({'salt': salt, 'iterations': iterations, 'password_hash': _password_hash(new_password, salt, iterations), 'updated_at': _now_iso()})
+        accounts[account_id] = rec
+        _write_accounts(accounts)
+    return jsonify({'ok': True, 'account_id': account_id, 'version': APP_VERSION})
+
 @app.get('/api/portfolio')
 def api_portfolio_get():
     if not _authorized():
         return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.', 'code': 'PIN_REQUIRED'}), 401
+    owner, account_error = _account_auth()
+    if account_error:
+        return jsonify({'ok': False, 'error': account_error, 'code': 'ACCOUNT_REQUIRED'}), 401
     with _portfolio_lock:
         store = _read_portfolio_store()
-        record = store.get(_portfolio_owner(), {})
+        record = store.get(owner, {})
     rows = record.get('rows', []) if isinstance(record, dict) else []
     return jsonify({'ok': True, 'rows': rows if isinstance(rows, list) else [],
                     'updated_at': record.get('updated_at') if isinstance(record, dict) else None,
@@ -266,6 +416,9 @@ def api_portfolio_get():
 def api_portfolio_put():
     if not _authorized():
         return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.', 'code': 'PIN_REQUIRED'}), 401
+    owner, account_error = _account_auth()
+    if account_error:
+        return jsonify({'ok': False, 'error': account_error, 'code': 'ACCOUNT_REQUIRED'}), 401
     payload = request.get_json(silent=True) or {}
     rows = payload.get('rows', [])
     if not isinstance(rows, list):
@@ -292,12 +445,37 @@ def api_portfolio_put():
                       'accumulate':bool(row.get('accumulate',False)) if typ=='held' else False,
                       'daily_amount':daily if typ=='held' else 0,
                       'accum_start':str(row.get('accum_start','')).strip()[:10] if typ=='held' else '',
+                      'horizon_months': max(1,min(120,int(float(row.get('horizon_months',24) or 24)))) if typ=='held' else 0,
+                      'target_amount': max(0.0,float(row.get('target_amount',0) or 0)) if typ=='held' else 0,
                       'added_at':str(row.get('added_at') or _now_iso())[:40],
                       'last':row.get('last') if isinstance(row.get('last'),dict) else None})
     updated=_now_iso()
     with _portfolio_lock:
-        store=_read_portfolio_store(); store[_portfolio_owner()]={'rows':clean,'updated_at':updated}; _write_portfolio_store(store)
+        store=_read_portfolio_store(); store[owner]={'rows':clean,'updated_at':updated}; _write_portfolio_store(store)
     return jsonify({'ok':True,'rows':clean,'updated_at':updated,'version':APP_VERSION})
+
+@app.delete('/api/portfolio')
+def api_portfolio_delete():
+    if not _authorized():
+        return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.', 'code': 'PIN_REQUIRED'}), 401
+    owner, account_error = _account_auth()
+    if account_error:
+        return jsonify({'ok': False, 'error': account_error, 'code': 'ACCOUNT_REQUIRED'}), 401
+    with _portfolio_lock:
+        store = _read_portfolio_store()
+        store.pop(owner, None)
+        _write_portfolio_store(store)
+    return jsonify({'ok': True, 'version': APP_VERSION})
+
+
+@app.get('/api/portfolio/legacy')
+def api_portfolio_legacy_get():
+    if not _authorized():
+        return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.'}), 401
+    with _portfolio_lock:
+        store = _read_portfolio_store(); record = store.get(_portfolio_owner_legacy(), {})
+    rows = record.get('rows', []) if isinstance(record, dict) else []
+    return jsonify({'ok': True, 'rows': rows if isinstance(rows, list) else [], 'version': APP_VERSION})
 
 @app.post('/api/fundamentals')
 def api_fundamentals():
