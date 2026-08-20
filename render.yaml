@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: v70-1-stock-dashboard
+    name: v78-4-stock-dashboard
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
@@ -12,3 +12,12 @@ services:
         value: "120"
       - key: MIN_REQUEST_GAP_SECONDS
         value: "2"
+      - key: DATA_DIR
+        value: "/var/data"
+      - key: APP_PIN
+        sync: false
+
+    disk:
+      name: portfolio-data
+      mountPath: /var/data
+      sizeGB: 1

@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, render_template, request
 from engine import analyze, analyze_search, fetch_fundamentals, fetch_recent_issues
 
-APP_VERSION = 'V76.0.0'
+APP_VERSION = 'V78.4.0'
 app = Flask(__name__)
 
 _cache_lock = threading.Lock()
@@ -22,6 +22,32 @@ _issue_cache = {}
 CACHE_TTL = max(0, int(os.environ.get('CACHE_TTL_SECONDS', '120')))
 MIN_REQUEST_GAP = max(0.0, float(os.environ.get('MIN_REQUEST_GAP_SECONDS', '2')))
 APP_PIN = os.environ.get('APP_PIN', '').strip()
+
+# Cross-device portfolio/watchlist sync. Point DATA_DIR at a persistent disk in production.
+DATA_DIR = os.environ.get('DATA_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data'))
+os.makedirs(DATA_DIR, exist_ok=True)
+PORTFOLIO_FILE = os.path.join(DATA_DIR, 'portfolio.json')
+_portfolio_lock = threading.Lock()
+
+def _portfolio_owner():
+    # The deployment PIN is also the private sync namespace. Never store the PIN itself.
+    pin = APP_PIN or 'local-default'
+    return hashlib.sha256(pin.encode('utf-8')).hexdigest()[:24]
+
+def _read_portfolio_store():
+    try:
+        with open(PORTFOLIO_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+def _write_portfolio_store(data):
+    tmp = PORTFOLIO_FILE + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, separators=(',', ':'))
+    os.replace(tmp, PORTFOLIO_FILE)
+
 
 # Market clocks are calculated on the server with explicit time zones.
 # This avoids Render's UTC clock (or a browser/PWA clock quirk) being mistaken for KRX time.
@@ -113,7 +139,7 @@ def _validated_settings(payload):
         'budget': 5_000_000, 'trade_budget': 300_000, 'long_budget': 1_000_000,
         'risk_pct': 1.0, 'stop_pct': 3.0, 'min_rrr': 1.5,
         'trust_mode': 'balanced', 'mode': 'smart', 'top_n': 60, 'held': '',
-        'search_avg_price': 0, 'search_held_qty': 0,
+        'search_avg_price': 0, 'search_held_qty': 0, 'saving_goal_krw': 1_000_000, 'monthly_saving_krw': 100_000,
     }
     out = {**defaults, **payload}
     def num(key, lo, hi):
@@ -122,7 +148,7 @@ def _validated_settings(payload):
         if not (lo <= v <= hi): raise ValueError(f'{key} 값은 {lo}~{hi} 범위여야 합니다.')
         out[key] = v
     num('budget', 0, 10_000_000_000); num('trade_budget', 0, 10_000_000_000)
-    num('long_budget', 0, 10_000_000_000); num('risk_pct', 0, 10)
+    num('long_budget', 0, 10_000_000_000); num('saving_goal_krw', 100_000, 10_000_000_000); num('monthly_saving_krw', 10_000, 1_000_000_000); num('risk_pct', 0, 10)
     num('stop_pct', 0.2, 30); num('min_rrr', 0.5, 10)
     num('search_avg_price', 0, 10_000_000_000); num('search_held_qty', 0, 10_000_000)
     try: out['top_n'] = max(10, min(int(float(out.get('top_n', 60))), 150))
@@ -210,6 +236,49 @@ def api_search():
         return jsonify({'ok': False, 'error': str(e)[:300], 'version': APP_VERSION}), 500
 
 
+
+
+@app.get('/api/portfolio')
+def api_portfolio_get():
+    if not _authorized():
+        return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.', 'code': 'PIN_REQUIRED'}), 401
+    with _portfolio_lock:
+        store = _read_portfolio_store()
+        record = store.get(_portfolio_owner(), {})
+    rows = record.get('rows', []) if isinstance(record, dict) else []
+    return jsonify({'ok': True, 'rows': rows if isinstance(rows, list) else [],
+                    'updated_at': record.get('updated_at') if isinstance(record, dict) else None,
+                    'persistent': os.path.abspath(DATA_DIR).startswith('/var/data'), 'version': APP_VERSION})
+
+@app.put('/api/portfolio')
+def api_portfolio_put():
+    if not _authorized():
+        return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.', 'code': 'PIN_REQUIRED'}), 401
+    payload = request.get_json(silent=True) or {}
+    rows = payload.get('rows', [])
+    if not isinstance(rows, list):
+        return jsonify({'ok': False, 'error': '보유/관심종목 데이터 형식이 올바르지 않습니다.'}), 400
+    clean = []
+    for row in rows[:100]:
+        if not isinstance(row, dict):
+            continue
+        typ = row.get('type') if row.get('type') in {'held','watch'} else 'watch'
+        query = str(row.get('query','')).strip()[:80]
+        if not query:
+            continue
+        market = str(row.get('market','AUTO')).upper()
+        if market not in {'AUTO','KR','US'}: market='AUTO'
+        try: avg=max(0.0,float(row.get('avg',0) or 0)); qty=max(0.0,float(row.get('qty',0) or 0))
+        except (TypeError,ValueError): avg=qty=0.0
+        clean.append({'id': str(row.get('id',''))[:180] or f'{typ}|{market}|{query.upper()}',
+                      'type':typ,'query':query,'market':market,
+                      'avg':avg if typ=='held' else 0,'qty':qty if typ=='held' else 0,
+                      'added_at':str(row.get('added_at') or _now_iso())[:40],
+                      'last':row.get('last') if isinstance(row.get('last'),dict) else None})
+    updated=_now_iso()
+    with _portfolio_lock:
+        store=_read_portfolio_store(); store[_portfolio_owner()]={'rows':clean,'updated_at':updated}; _write_portfolio_store(store)
+    return jsonify({'ok':True,'rows':clean,'updated_at':updated,'version':APP_VERSION})
 
 @app.post('/api/fundamentals')
 def api_fundamentals():

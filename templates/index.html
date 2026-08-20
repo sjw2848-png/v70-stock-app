@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#07101e" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="V78.0.0 주식판" />
-  <title>V78.0.0 실전 검증 종목선별판</title>
+  <meta name="apple-mobile-web-app-title" content="V78.1.0 주식판" />
+  <title>V78.1.0 실전 검증 종목선별판</title>
   <link rel="manifest" href="/static/manifest.json" />
   <link rel="icon" href="/static/icon-192.png" />
   <link rel="apple-touch-icon" href="/static/icon-192.png" />
@@ -16,7 +16,7 @@
 <body>
   <header class="topbar">
     <div class="brand-wrap">
-      <div class="eyebrow">V78.0.0 · 성과 피드백·확률보정 검증판</div>
+      <div class="eyebrow">V78.1.0 · 강세테마·적립식·위험관리 통합판</div>
       <h1>오늘 사도 돼?</h1>
       <p id="connectionText">열자마자 YES · WAIT · NO만 먼저 확인</p>
     </div>
@@ -50,6 +50,9 @@
         <label>전체 투자금<input id="budget" inputmode="numeric" type="number" value="5000000" step="100000" /></label>
         <label>한 종목에 쓸 금액<input id="tradeBudget" inputmode="numeric" type="number" value="300000" step="50000" /></label>
         <label>장기투자 예산<input id="longBudget" inputmode="numeric" type="number" value="1000000" step="100000" /></label>
+        <label>모으기 목표금액<input id="savingGoal" inputmode="numeric" type="number" value="1000000" step="100000" /></label>
+        <label>월 적립금<input id="monthlySaving" inputmode="numeric" type="number" value="100000" step="10000" /></label>
+        <label>현재까지 모은 원금<input id="currentSaving" inputmode="numeric" type="number" value="0" step="10000" /></label>
         <label>1회 허용손실 %<input id="riskPct" inputmode="decimal" type="number" value="1" step="0.1" /></label>
       </div>
       <div class="money-presets" aria-label="1회 매수금액 빠른선택">
@@ -74,6 +77,22 @@
       <div class="search-hint">평단과 수량을 넣으면 검색 결과에서 <b>추가매수 / 보유 / 일부매도 / 비중축소</b>, 현재 손익, 평단 회복 필요 상승률, 손실 대응까지 같이 판단합니다. 미국주는 평단을 <b>달러($)</b>로 입력하세요.</div>
       <div id="liveSearchStatus" class="status compact"></div>
       <div id="liveSearchResult" class="single-result"></div>
+    </section>
+
+    <section class="portfolio-center card" id="portfolioCenter">
+      <div class="section-title-row"><div><b>💼 내 종목 센터</b><span>보유주와 관심종목을 저장하고 한눈에 매수·보유·매도 시점을 다시 분석합니다</span></div></div>
+      <div class="portfolio-tabs"><button id="portfolioTabHeld" class="primary" type="button">보유 종목</button><button id="portfolioTabWatch" class="ghost" type="button">관심 종목</button><button id="portfolioRefresh" class="ghost" type="button">전체 최신분석</button></div>
+      <div class="portfolio-add-grid">
+        <label>종목명/코드<input id="portfolioQuery" type="text" placeholder="예: 아리바이오홀딩스, 005930, NVDA" /></label>
+        <label>시장<select id="portfolioMarket"><option value="AUTO">자동</option><option value="KR">국내</option><option value="US">미국</option></select></label>
+        <label>평단가<input id="portfolioAvg" type="number" min="0" step="any" placeholder="보유주만" /></label>
+        <label>수량<input id="portfolioQty" type="number" min="0" step="1" placeholder="보유주만" /></label>
+        <button id="addHoldingBtn" class="primary" type="button">+ 보유주 추가</button><button id="addWatchBtn" class="secondary" type="button">☆ 관심종목 추가</button>
+      </div>
+      <div class="portfolio-summary" id="portfolioSummary">저장한 종목이 없습니다.</div>
+      <div id="portfolioStatus" class="status compact"></div>
+      <div id="portfolioList" class="portfolio-list"></div>
+      <p class="quality-note">보유주 평단·수량은 이 브라우저에 저장됩니다. ‘매수/매도 시점’은 현재 데이터 기반 재평가이며 주문을 자동 실행하지 않습니다. 관심종목은 평단·수량 없이 추적합니다.</p>
     </section>
 
     <section class="verdict-card card" id="topPick" hidden>
@@ -154,6 +173,18 @@
       <p class="quality-note">※ 초록색 ‘매수 후보’와 노란색 ‘진입대기’를 구분해서 보세요. 기대수익·제한손실은 계산값이며 실제 수익을 보장하지 않습니다.</p>
     </section>
 
+    <section class="performance-section card" id="autoStrategySection">
+      <div class="section-title-row"><div><b>🧭 시장 자동 전략 전환</b><span>시장 상태에 따라 단기·테마·적립·현금의 우선순위를 자동 조정합니다</span></div></div>
+      <div id="autoStrategy" class="performance-summary">분석 후 오늘의 운용 모드를 표시합니다.</div>
+      <p class="quality-note">※ 급락장에서는 단기 진입을 억지로 만들지 않습니다. 적립도 우량·데이터 기준을 통과한 후보만 시간분산합니다.</p>
+    </section>
+
+    <section class="performance-section card" id="strategyDashboardSection">
+      <div class="section-title-row"><div><b>📊 실전 전략 성과 대시보드</b><span>저장된 실제 추천을 단기·테마/개별·ETF 전략으로 나눠 D+5 성과를 비교합니다</span></div></div>
+      <div id="strategyDashboard"><div class="quality-empty">D+5 기록이 쌓이면 전략별 실제 성과를 비교합니다.</div></div>
+      <p class="quality-note">※ 표본이 적을 때는 승률보다 관찰용으로 보세요. 성과가 좋다는 이유만으로 자동 매수량을 늘리지 않습니다.</p>
+    </section>
+
     <section class="performance-section card" id="performanceSection">
       <div class="section-title-row"><div><b>🧪 추천 사후 성적표</b><span>추천 당시 가격을 저장하고 이후 앱을 열 때 D+1·D+3·D+5 성과를 관찰 기록합니다</span></div></div>
       <div id="performanceSummary" class="performance-summary">아직 누적된 추천 기록이 없습니다.</div>
@@ -162,9 +193,15 @@
     </section>
 
     <section class="performance-section card" id="feedbackSection">
-      <div class="section-title-row"><div><b>🧠 V75 정밀 검증·성과 피드백 엔진</b><span>D+5 실제 관찰결과를 전략·시장국면·추천유형별로 분해하고 추정확률의 보정오차를 확인합니다</span></div></div>
+      <div class="section-title-row"><div><b>🧠 V78.2.1 정밀 검증·성과 피드백 엔진</b><span>D+5 실제 관찰결과를 전략·시장국면·추천유형별로 분해하고 추정확률의 보정오차를 확인합니다</span></div></div>
       <div id="feedbackEngine"><div class="quality-empty">D+5 완료 기록이 쌓이면 자동 분석합니다.</div></div>
       <p class="quality-note">※ 브라우저 로컬 기록 기반 감사 기능입니다. 미래 성과를 보장하거나 자동으로 공격성을 높이지 않습니다.</p>
+    </section>
+
+    <section class="quality-section card" id="accumulationSection">
+      <div class="section-title-row"><div><b>🌱 주식 모으기 · 종목 적합도 · 기간 · 수익 시나리오</b><span>수량을 강제하지 않고 월 적립금 기준으로 장기 후보와 목표기간을 계산합니다</span></div></div>
+      <div id="accumulationCards" class="quality-cards"><div class="quality-empty">분석 후 적립식 후보를 표시합니다.</div></div>
+      <p class="quality-note">※ 기본 목표기간은 수익률 0%로 계산합니다. 수익률 시나리오는 설명용이며 실제 수익을 보장하지 않습니다. 급락장에서도 우량 후보의 시간분산 적립과 단기매매는 별개로 판단합니다.</p>
     </section>
 
     <section class="quality-section card" id="qualitySection">

@@ -16,7 +16,7 @@ import yfinance as yf
 import FinanceDataReader as fdr
 
 # ---------------------------------------------------------------------
-# V78.0 PORTFOLIO RISK + LIVE DRIFT + EXTENDED OUTCOME AUDIT
+# V78.1 ADAPTIVE LANES + THEME MOMENTUM + AMOUNT-BASED ACCUMULATION
 # - V69 core ideas retained
 # - no fake after-hours data
 # - US technical comparisons stay in native USD
@@ -337,6 +337,112 @@ def build_sector_analytics(results):
         sec_info['picks']=picks
 
     return {'top_sectors':ranking[:8],'holding_allocation':alloc,'concentration_warnings':warnings,'note':'섹터 강도와 대장 표시는 현재 분석군 내부의 상대 비교이며 시장 전체 순위를 의미하지 않습니다.'}
+
+
+
+def build_accumulation_candidates(results, settings, limit=6):
+    """Amount-based long-term accumulation planner with suitability, horizon and scenario audit.
+
+    The horizon is a management/review horizon inferred from trend stability and drawdown risk,
+    NOT a promise that the stock will be profitable by that date. Profit scenarios are mechanical
+    illustrations from the user's contribution plan and assumed annual return rates.
+    """
+    goal=max(_safe_float(settings.get('saving_goal_krw'),1_000_000),100_000)
+    monthly=max(_safe_float(settings.get('monthly_saving_krw'),100_000),10_000)
+    current=max(0,_safe_float(settings.get('current_saving_krw'),0))
+    remaining=max(0,goal-current)
+    base_months=0 if remaining<=0 else max(1,int(np.ceil(remaining/monthly)))
+    pool=[]
+    for x in results:
+        if not x.get('ok') or x.get('hard_block') or x.get('held_price_krw'):
+            continue
+        lp=x.get('long_term') or {}
+        long_score=_safe_float(lp.get('score'),0)
+        quality=bool(x.get('long_quality_candidate'))
+        if long_score < 55 and not quality:
+            continue
+        price=max(_safe_float(x.get('price_krw'),0),1)
+        momentum=_safe_float(x.get('momentum'),50)
+        dq=_safe_float(x.get('data_quality_score'),70)
+        bt=x.get('backtest') or {}
+        validation=_safe_float(bt.get('validation_score'),50)
+        mdd=abs(_safe_float(bt.get('net_max_drawdown_pct', bt.get('max_drawdown_pct',0)),0))
+        rsi=_safe_float(x.get('rsi'),50)
+        market_state=str(x.get('market_state') or '')
+        # Long accumulation suitability: stable long trend dominates short momentum.
+        rank_score=float(np.clip(long_score*.52+dq*.18+validation*.15+momentum*.15,0,100))
+        if rsi>=78: rank_score-=6
+        if mdd>=18: rank_score-=5
+        rank_score=float(np.clip(rank_score,0,100))
+        if rank_score>=80: grade='S'; grade_label='⭐⭐⭐⭐⭐ 매우 적합'
+        elif rank_score>=72: grade='A'; grade_label='⭐⭐⭐⭐ 적합'
+        elif rank_score>=63: grade='B'; grade_label='⭐⭐⭐ 분할 적합'
+        else: grade='C'; grade_label='⭐⭐ 관찰'
+        # Review horizon: more volatile/weaker names require shorter review cycles; robust names can be held longer.
+        if rank_score>=78 and mdd<15: horizon='12~24개월'; review_months=18
+        elif rank_score>=68: horizon='6~12개월'; review_months=9
+        else: horizon='3~6개월'; review_months=4
+        # Start suitability separates a good accumulation asset from a good entry today.
+        if '급락' in market_state:
+            start_label='🟡 소액 시작·4회 이상 분할'; start_score=max(45,rank_score-12)
+            cadence='급락장: 월 배정액을 4회 이상 나눠 시간분산'
+        elif rsi>=78 or momentum>=82:
+            start_label='🟠 좋은 후보지만 추격 금지'; start_score=max(40,rank_score-15)
+            cadence='과열 완화/눌림 확인 후 월 2~4회 분할'
+        elif rank_score>=72:
+            start_label='🟢 지금부터 분할 적립 가능'; start_score=min(100,rank_score+3)
+            cadence='월 2회 정액 분할 적립'
+        else:
+            start_label='🟡 소액 적립·추세 재확인'; start_score=rank_score
+            cadence='월 1~2회 소액 적립·추세 재확인'
+        reasons=[]
+        reasons.extend((lp.get('reasons') or [])[:2])
+        if dq>=85: reasons.append('데이터 품질 우수')
+        if validation>=65: reasons.append('과거 검증 안정성 양호')
+        if rsi>=78: reasons.append('현재 단기 과열')
+        if mdd>=18: reasons.append('과거 낙폭 주의')
+        pool.append({'name':x.get('name'),'code':x.get('code'),'category':x.get('category'),'sector':x.get('sector'),
+                     'score':round(rank_score,1),'long_score':round(long_score,1),'price_krw':_safe_int(price),
+                     'accumulation_grade':grade,'accumulation_grade_label':grade_label,
+                     'recommended_horizon':horizon,'review_months':review_months,
+                     'start_label':start_label,'start_score':round(float(start_score),1),
+                     'goal_krw':_safe_int(goal),'current_principal_krw':_safe_int(current),'remaining_goal_krw':_safe_int(remaining),
+                     'base_months':base_months,'cadence':cadence,'mdd_pct':round(mdd,1),
+                     'reason':' · '.join(reasons[:4]) or '장기추세·데이터품질·검증점수를 함께 본 적립 후보'})
+    pool.sort(key=lambda z:(z['score'],z['start_score']),reverse=True)
+    pool=pool[:max(1,min(limit,4))]
+    if not pool: return []
+    weights=np.array([max(10.0,float(z['score'])-45.0) for z in pool],dtype=float)
+    weights=weights/weights.sum()
+    allocated=0
+    for i,z in enumerate(pool):
+        alloc=_safe_int(monthly-allocated) if i==len(pool)-1 else _safe_int(round(monthly*float(weights[i])/1000)*1000)
+        alloc=max(0,alloc); allocated+=alloc
+        price=max(z['price_krw'],1); whole=int(alloc//price)
+        carry_months=max(1,int(np.ceil(price/max(alloc,1)))) if whole==0 else 1
+        # Mechanical profit/loss sensitivity for the candidate's review horizon.
+        horizon_months=z['review_months']
+        candidate_scenarios=[]
+        for annual in (-10,0,4,8,15):
+            r=(annual/100)/12
+            bal=0.0
+            for _ in range(horizon_months): bal=bal*(1+r)+alloc
+            principal=alloc*horizon_months
+            candidate_scenarios.append({'annual_pct':annual,'months':horizon_months,
+                                        'principal_krw':_safe_int(principal),'value_krw':_safe_int(bal),
+                                        'profit_krw':_safe_int(bal-principal)})
+        z.update({'portfolio_weight_pct':round(float(weights[i])*100,1),'monthly_krw':alloc,
+                  'whole_qty_per_month':whole,'carry_months_for_one_share':carry_months,
+                  'leftover_krw':max(0,alloc-whole*price),'candidate_scenarios':candidate_scenarios,
+                  'note':'권장기간은 재평가 주기이며 수익 보장 기간이 아닙니다. 예상손익은 가정수익률에 따른 단순 시나리오입니다.'})
+    scenarios=[]
+    for annual in (0,4,8):
+        r=(annual/100)/12; bal=current; m=0
+        while bal < goal and m < 600:
+            bal=bal*(1+r)+monthly; m+=1
+        scenarios.append({'annual_pct':annual,'months':m})
+    for z in pool: z['scenarios']=scenarios
+    return pool
 
 
 def build_scalp_candidates(results, settings, limit=2):
@@ -1913,6 +2019,7 @@ def analyze(settings: Dict[str, Any]):
     etf_buyable=[x for x in etf_ranked if x.get('opportunity_eligible') and x.get('qty',0)>0]
     sector_analysis = build_sector_analytics(valid)
     scalp_candidates = build_scalp_candidates(valid, settings, limit=2)
+    accumulation_candidates = build_accumulation_candidates(valid, settings, limit=6)
     summary = {
         'total': len(results),
         'valid': len(valid),
@@ -1922,13 +2029,14 @@ def analyze(settings: Dict[str, Any]):
         'individual_buyable_count': len(individual_buyable),
         'etf_buyable_count': len(etf_buyable),
         'scalp_count': len(scalp_candidates),
+        'accumulation_count': len(accumulation_candidates),
         's_count': sum(1 for x in valid if x.get('grade') == 'S'),
         'a_count': sum(1 for x in valid if x.get('grade') == 'A'),
         'long_quality_count': sum(1 for x in valid if x.get('long_quality_candidate')),
         'elapsed_sec': round(time.time() - started, 1),
         'usdkrw': round(fx, 2),
     }
-    return {'market': market, 'summary': summary, 'sector_analysis': sector_analysis, 'portfolio_risk': portfolio_risk, 'scalp_candidates': scalp_candidates, 'results': results}
+    return {'market': market, 'summary': summary, 'sector_analysis': sector_analysis, 'portfolio_risk': portfolio_risk, 'scalp_candidates': scalp_candidates, 'accumulation_candidates': accumulation_candidates, 'results': results}
 
 # ---------------------------------------------------------------------
 # V70.4 on-demand symbol search
