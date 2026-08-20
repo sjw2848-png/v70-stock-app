@@ -9,9 +9,9 @@ import webbrowser
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, render_template, request
-from engine import analyze, analyze_search, fetch_fundamentals, fetch_recent_issues
+from engine import analyze, analyze_search, search_instruments, fetch_fundamentals, fetch_recent_issues
 
-APP_VERSION = 'V78.4.0'
+APP_VERSION = 'V78.4.1'
 app = Flask(__name__)
 
 _cache_lock = threading.Lock()
@@ -238,6 +238,18 @@ def api_search():
 
 
 
+
+@app.get('/api/symbols')
+def api_symbols():
+    if not _authorized():
+        return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.'}), 401
+    q=str(request.args.get('q','')).strip(); market=str(request.args.get('market','AUTO')).upper()
+    if not q: return jsonify({'ok':True,'items':[],'version':APP_VERSION})
+    try:
+        return jsonify({'ok':True,'items':search_instruments(q,market,12),'version':APP_VERSION})
+    except Exception as e:
+        return jsonify({'ok':False,'error':str(e)[:200],'items':[],'version':APP_VERSION}),500
+
 @app.get('/api/portfolio')
 def api_portfolio_get():
     if not _authorized():
@@ -267,7 +279,7 @@ def api_portfolio_put():
         if not query:
             continue
         market = str(row.get('market','AUTO')).upper()
-        if market not in {'AUTO','KR','US'}: market='AUTO'
+        if market not in {'AUTO','KR','ETF','US'}: market='AUTO'
         try: avg=max(0.0,float(row.get('avg',0) or 0)); qty=max(0.0,float(row.get('qty',0) or 0))
         except (TypeError,ValueError): avg=qty=0.0
         clean.append({'id': str(row.get('id',''))[:180] or f'{typ}|{market}|{query.upper()}',

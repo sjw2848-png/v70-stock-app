@@ -23,6 +23,25 @@ import FinanceDataReader as fdr
 # - position size uses BOTH trade budget and risk-per-trade
 # ---------------------------------------------------------------------
 
+_KR_ETF_CACHE = None
+_KR_ETF_CACHE_AT = 0.0
+
+def get_kr_etf_mapping(force=False):
+    global _KR_ETF_CACHE, _KR_ETF_CACHE_AT
+    if not force and _KR_ETF_CACHE is not None and time.time()-_KR_ETF_CACHE_AT < 6*3600:
+        return _KR_ETF_CACHE
+    m={}
+    try:
+        df=fdr.StockListing('ETF/KR')
+        ccol=next((c for c in ['Symbol','Code','단축코드'] if c in df.columns),None); ncol=next((c for c in ['Name','한글 종목약명','종목명'] if c in df.columns),None)
+        if ccol and ncol:
+            for _,r in df.iterrows():
+                code=_normalize_kr_code(r[ccol]); name=str(r[ncol]).strip()
+                if code and name: m[code]=name
+    except Exception: pass
+    for code,info in KR_ETFS.items(): m.setdefault(code,str(info.get('name',code)))
+    _KR_ETF_CACHE=m; _KR_ETF_CACHE_AT=time.time(); return m
+
 GRADE_THRESHOLDS = {
     'S_momentum': 80, 'S_kelly': 0.10, 'S_rrr': 2.0,
     'A_momentum': 70, 'A_kelly': 0.05, 'A_rrr': 1.5,
@@ -1885,7 +1904,7 @@ def parse_held(text: str):
         if code:
             info = dict(KR_CURATED.get(code) or KR_ETFS.get(code) or {'name':name, 'theme':'보유/검색 종목', 'target_pct':4.0, 'tech':'추세매매'})
             info.update({'name': info.get('name') or name, 'theme':'보유/검색 종목', 'my_price':price, 'held_qty':qty})
-            market = 'ETF' if code in KR_ETFS else 'KR'
+            market = 'ETF' if code in get_kr_etf_mapping() else 'KR'
             result.append((code, info, market))
     return result
 
@@ -2075,7 +2094,7 @@ def _resolve_search_query(query: str, market_hint: str = 'AUTO'):
     # Known curated Korean/US names first.
     for code, info in {**KR_CURATED, **KR_ETFS}.items():
         if q == info.get('name') or qu == code.upper():
-            market = 'ETF' if code in KR_ETFS else 'KR'
+            market = 'ETF' if code in get_kr_etf_mapping() else 'KR'
             return code, dict(info), market
     for code, info in US_CURATED.items():
         if q.lower() == str(info.get('name', '')).lower() or qu == code.upper():
@@ -2089,14 +2108,14 @@ def _resolve_search_query(query: str, market_hint: str = 'AUTO'):
     if q.isdigit():
         code = q.zfill(6)
         name = next((n for n, c in mapping.items() if c == code), code)
-        market = 'ETF' if code in KR_ETFS else 'KR'
+        market = 'ETF' if code in get_kr_etf_mapping() else 'KR'
         info = dict(KR_ETFS.get(code) or KR_CURATED.get(code) or {'name': name, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'tech': '추세매매'})
         info['name'] = info.get('name') or name
         return code, info, market
 
     if q in mapping:
         code = mapping[q]
-        market = 'ETF' if code in KR_ETFS else 'KR'
+        market = 'ETF' if code in get_kr_etf_mapping() else 'KR'
         info = dict(KR_ETFS.get(code) or KR_CURATED.get(code) or {'name': q, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'tech': '추세매매'})
         return code, info, market
 
@@ -2105,7 +2124,7 @@ def _resolve_search_query(query: str, market_hint: str = 'AUTO'):
     if matches and hint != 'US':
         matches.sort(key=lambda x: (0 if x[0].lower().startswith(q.lower()) else 1, len(x[0]), x[0]))
         name, code = matches[0]
-        market = 'ETF' if code in KR_ETFS else 'KR'
+        market = 'ETF' if code in get_kr_etf_mapping() else 'KR'
         info = dict(KR_ETFS.get(code) or KR_CURATED.get(code) or {'name': name, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'tech': '추세매매'})
         return code, info, market
 
@@ -2116,6 +2135,64 @@ def _resolve_search_query(query: str, market_hint: str = 'AUTO'):
 
     raise ValueError(f'종목을 찾지 못했습니다: {q}')
 
+
+
+def search_instruments(query: str, market_hint: str = 'AUTO', limit: int = 12):
+    """Return selectable stock/ETF candidates instead of silently choosing a partial-name match.
+    Korean results include KRX equities and, when the provider exposes them, KR ETFs.
+    US results use Yahoo's symbol search and are restricted to equities/ETFs.
+    """
+    q=str(query or '').strip(); hint=str(market_hint or 'AUTO').upper()
+    if len(q) < 1: return []
+    qn=re.sub(r'\s+','',q).lower(); out=[]; seen=set()
+    def add(code,name,market,kind='주식',exchange=''):
+        key=(market,str(code).upper())
+        if key in seen or not code or not name: return
+        seen.add(key); out.append({'code':str(code),'name':str(name),'market':market,'type':kind,'exchange':str(exchange or '')})
+    if hint != 'US':
+        # KRX equities
+        mapping=get_krx_mapping()
+        scored=[]
+        for name,code in mapping.items():
+            nn=re.sub(r'\s+','',str(name)).lower(); cc=str(code)
+            if qn in nn or qn in cc:
+                score=0 if nn==qn or cc==qn else 1 if nn.startswith(qn) else 2
+                scored.append((score,len(nn),name,code))
+        for _,_,name,code in sorted(scored)[:limit*2]:
+            add(code,name,'KR','ETF' if code in get_kr_etf_mapping() else '주식','KRX')
+        # ETF listing is separate on some FinanceDataReader versions.
+        try:
+            edf=fdr.StockListing('ETF/KR')
+            ccol=next((c for c in ['Symbol','Code','단축코드'] if c in edf.columns),None)
+            ncol=next((c for c in ['Name','한글 종목약명','종목명'] if c in edf.columns),None)
+            if ccol and ncol:
+                esc=[]
+                for _,r in edf.iterrows():
+                    code=_normalize_kr_code(r[ccol]); name=str(r[ncol]).strip(); nn=re.sub(r'\s+','',name).lower()
+                    if qn in nn or qn in code:
+                        score=0 if nn==qn or code==qn else 1 if nn.startswith(qn) else 2
+                        esc.append((score,len(nn),name,code))
+                for _,_,name,code in sorted(esc)[:limit*2]: add(code,name,'KR','ETF','KRX ETF')
+        except Exception:
+            pass
+    if hint not in {'KR','ETF'} and (hint=='US' or re.search(r'[A-Za-z]',q)):
+        try:
+            search=yf.Search(q, max_results=max(limit,8), news_count=0)
+            for z in (getattr(search,'quotes',None) or []):
+                qt=str(z.get('quoteType') or '').upper()
+                if qt not in {'EQUITY','ETF'}: continue
+                sym=str(z.get('symbol') or '').upper(); name=z.get('shortname') or z.get('longname') or sym
+                add(sym,name,'US','ETF' if qt=='ETF' else '주식',z.get('exchange') or z.get('exchDisp') or '')
+        except Exception:
+            pass
+    # Curated fallback, useful when external symbol-search is temporarily unavailable.
+    for code,info in ({**KR_CURATED,**KR_ETFS} if hint!='US' else {}).items():
+        name=str(info.get('name',code)); nn=re.sub(r'\s+','',name).lower()
+        if qn in nn or qn in code: add(code,name,'KR','ETF' if code in get_kr_etf_mapping() else '주식','KRX')
+    for code,info in (US_CURATED if hint!='KR' else {}).items():
+        name=str(info.get('name',code));
+        if q.lower() in name.lower() or q.upper() in code.upper(): add(code,name,'US','주식','US')
+    return out[:limit]
 
 def analyze_search(query: str, settings: Dict[str, Any], market_hint: str = 'AUTO'):
     started = time.time()
