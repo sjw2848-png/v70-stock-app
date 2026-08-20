@@ -2137,62 +2137,104 @@ def _resolve_search_query(query: str, market_hint: str = 'AUTO'):
 
 
 
+_SYMBOL_SEARCH_CACHE = {}
+_SYMBOL_SEARCH_CACHE_TTL = 900
+
+_US_SEARCH_ALIASES = {
+    '프록터갬블':'PG', '프록터앤갬블':'PG', '프록터앤드갬블':'PG', '프록터앤드겜블':'PG',
+    'proctergamble':'PG', 'procterandgamble':'PG', 'pg':'PG',
+    '엔비디아':'NVDA', 'nvidia':'NVDA', '애플':'AAPL', 'apple':'AAPL',
+    '테슬라':'TSLA', 'tesla':'TSLA', '마이크로소프트':'MSFT', 'microsoft':'MSFT',
+    '아마존':'AMZN', 'amazon':'AMZN', '구글':'GOOGL', '알파벳':'GOOGL', 'google':'GOOGL', 'alphabet':'GOOGL',
+    '메타':'META', 'meta':'META', '코카콜라':'KO', 'cocacola':'KO', '월마트':'WMT', 'walmart':'WMT',
+    '브로드컴':'AVGO', 'broadcom':'AVGO', '넷플릭스':'NFLX', 'netflix':'NFLX', '코스트코':'COST', 'costco':'COST',
+    '제이피모건':'JPM', 'jp모건':'JPM', 'jpmorgan':'JPM',
+}
+
+def _search_norm(v):
+    v=str(v or '').strip().lower()
+    # company-name punctuation/spacing should not make search fail.
+    v=v.replace('&','and').replace('＆','and').replace('앤드','and').replace('앤','and')
+    return re.sub(r'[^0-9a-z가-힣]+','',v)
+
+def _yahoo_symbol_search(q, limit=12):
+    """Fast Yahoo autocomplete endpoint. Hard timeout prevents the UI hanging."""
+    try:
+        r=requests.get('https://query2.finance.yahoo.com/v1/finance/search', params={
+            'q':q, 'quotesCount':max(8,min(int(limit)*2,30)), 'newsCount':0,
+            'enableFuzzyQuery':'true', 'quotesQueryId':'tss_match_phrase_query'
+        }, headers={'User-Agent':'Mozilla/5.0'}, timeout=2.2)
+        r.raise_for_status()
+        return r.json().get('quotes',[]) or []
+    except Exception:
+        return []
+
 def search_instruments(query: str, market_hint: str = 'AUTO', limit: int = 12):
-    """Return selectable stock/ETF candidates instead of silently choosing a partial-name match.
-    Korean results include KRX equities and, when the provider exposes them, KR ETFs.
-    US results use Yahoo's symbol search and are restricted to equities/ETFs.
-    """
-    q=str(query or '').strip(); hint=str(market_hint or 'AUTO').upper()
-    if len(q) < 1: return []
-    qn=re.sub(r'\s+','',q).lower(); out=[]; seen=set()
-    def add(code,name,market,kind='주식',exchange=''):
-        key=(market,str(code).upper())
+    """Fast selectable KR/US stock+ETF search with aliases, fuzzy-ish normalization and TTL cache."""
+    q=str(query or '').strip(); hint=str(market_hint or 'AUTO').upper(); limit=max(1,min(int(limit or 12),20))
+    if not q: return []
+    qn=_search_norm(q); cache_key=(qn,hint,limit); now=time.time()
+    cached=_SYMBOL_SEARCH_CACHE.get(cache_key)
+    if cached and now-cached[0] < _SYMBOL_SEARCH_CACHE_TTL: return [dict(x) for x in cached[1]]
+    out=[]; seen=set()
+    def add(code,name,market,kind='주식',exchange='',score=50):
+        code=str(code or '').strip(); name=str(name or '').strip(); key=(market,code.upper())
         if key in seen or not code or not name: return
-        seen.add(key); out.append({'code':str(code),'name':str(name),'market':market,'type':kind,'exchange':str(exchange or '')})
+        seen.add(key); out.append({'code':code,'name':name,'market':market,'type':kind,'exchange':str(exchange or ''),'_score':score})
+
+    # Alias hit is immediate and also used to search Yahoo by canonical ticker.
+    alias=_US_SEARCH_ALIASES.get(qn)
+    if alias and hint not in {'KR','ETF'}:
+        known=US_CURATED.get(alias,{})
+        fallback_names={'PG':'Procter & Gamble','KO':'Coca-Cola','AMZN':'Amazon','GOOGL':'Alphabet','META':'Meta Platforms'}
+        add(alias,known.get('name') or fallback_names.get(alias) or alias,'US','주식','US',0)
+
+    # Local cached KRX master: no network call after warm-up. Curated data gives instant first-response fallbacks.
     if hint != 'US':
-        # KRX equities
-        mapping=get_krx_mapping()
+        local={}
+        for code,info in {**KR_CURATED,**KR_ETFS}.items(): local[str(info.get('name',code))]=str(code)
+        try: local.update(get_krx_mapping())
+        except Exception: pass
         scored=[]
-        for name,code in mapping.items():
-            nn=re.sub(r'\s+','',str(name)).lower(); cc=str(code)
-            if qn in nn or qn in cc:
-                score=0 if nn==qn or cc==qn else 1 if nn.startswith(qn) else 2
-                scored.append((score,len(nn),name,code))
-        for _,_,name,code in sorted(scored)[:limit*2]:
-            add(code,name,'KR','ETF' if code in get_kr_etf_mapping() else '주식','KRX')
-        # ETF listing is separate on some FinanceDataReader versions.
-        try:
-            edf=fdr.StockListing('ETF/KR')
-            ccol=next((c for c in ['Symbol','Code','단축코드'] if c in edf.columns),None)
-            ncol=next((c for c in ['Name','한글 종목약명','종목명'] if c in edf.columns),None)
-            if ccol and ncol:
-                esc=[]
-                for _,r in edf.iterrows():
-                    code=_normalize_kr_code(r[ccol]); name=str(r[ncol]).strip(); nn=re.sub(r'\s+','',name).lower()
-                    if qn in nn or qn in code:
-                        score=0 if nn==qn or code==qn else 1 if nn.startswith(qn) else 2
-                        esc.append((score,len(nn),name,code))
-                for _,_,name,code in sorted(esc)[:limit*2]: add(code,name,'KR','ETF','KRX ETF')
-        except Exception:
-            pass
-    if hint not in {'KR','ETF'} and (hint=='US' or re.search(r'[A-Za-z]',q)):
-        try:
-            search=yf.Search(q, max_results=max(limit,8), news_count=0)
-            for z in (getattr(search,'quotes',None) or []):
-                qt=str(z.get('quoteType') or '').upper()
-                if qt not in {'EQUITY','ETF'}: continue
-                sym=str(z.get('symbol') or '').upper(); name=z.get('shortname') or z.get('longname') or sym
-                add(sym,name,'US','ETF' if qt=='ETF' else '주식',z.get('exchange') or z.get('exchDisp') or '')
-        except Exception:
-            pass
-    # Curated fallback, useful when external symbol-search is temporarily unavailable.
-    for code,info in ({**KR_CURATED,**KR_ETFS} if hint!='US' else {}).items():
-        name=str(info.get('name',code)); nn=re.sub(r'\s+','',name).lower()
-        if qn in nn or qn in code: add(code,name,'KR','ETF' if code in get_kr_etf_mapping() else '주식','KRX')
-    for code,info in (US_CURATED if hint!='KR' else {}).items():
-        name=str(info.get('name',code));
-        if q.lower() in name.lower() or q.upper() in code.upper(): add(code,name,'US','주식','US')
-    return out[:limit]
+        for name,code in local.items():
+            nn=_search_norm(name); cc=str(code)
+            if qn in nn or qn in _search_norm(cc):
+                score=0 if nn==qn or cc==q else 5 if nn.startswith(qn) else 15
+                scored.append((score,len(nn),name,cc))
+        etfs=get_kr_etf_mapping()
+        for score,_,name,code in sorted(scored)[:limit*3]: add(code,name,'KR','ETF' if code in etfs else '주식','KRX',score)
+
+    # US: use canonical ticker for Korean aliases, otherwise original text. Yahoo supports company-name partials.
+    if hint not in {'KR','ETF'}:
+        yahoo_q=alias or q
+        for z in _yahoo_symbol_search(yahoo_q,limit):
+            qt=str(z.get('quoteType') or '').upper()
+            if qt not in {'EQUITY','ETF'}: continue
+            sym=str(z.get('symbol') or '').upper(); name=z.get('shortname') or z.get('longname') or sym
+            exch=z.get('exchange') or z.get('exchDisp') or ''
+            # Avoid non-US listings when AUTO/US was requested, while allowing common US exchanges.
+            exch_u=str(exch).upper()
+            if hint=='US' and exch_u and not any(x in exch_u for x in ('NMS','NYQ','NGM','NCM','NASDAQ','NYSE','ASE','PCX','BATS','ARCA')): continue
+            nn=_search_norm(name); sn=_search_norm(sym)
+            score=1 if alias and sym==alias else 2 if sn==qn else 8 if nn.startswith(qn) else 18
+            add(sym,name,'US','ETF' if qt=='ETF' else '주식',exch,score)
+
+        # Curated fallback + ticker direct candidate: search should never say 'no match' for a valid-looking ticker.
+        for code,info in US_CURATED.items():
+            name=str(info.get('name',code)); nn=_search_norm(name)
+            if qn in nn or qn in _search_norm(code): add(code,name,'US','주식','US',10)
+        qu=q.upper().replace(' ','')
+        if re.fullmatch(r'[A-Z][A-Z0-9.\-]{0,9}',qu): add(qu,US_CURATED.get(qu,{}).get('name') or qu,'US','주식','직접 티커',30)
+
+    out.sort(key=lambda x:(x['_score'], len(x['name']), x['name']))
+    result=[]
+    for x in out[:limit]:
+        y=dict(x); y.pop('_score',None); result.append(y)
+    _SYMBOL_SEARCH_CACHE[cache_key]=(now,result)
+    # bounded cache
+    if len(_SYMBOL_SEARCH_CACHE)>300:
+        for k in list(_SYMBOL_SEARCH_CACHE)[:100]: _SYMBOL_SEARCH_CACHE.pop(k,None)
+    return result
 
 def analyze_search(query: str, settings: Dict[str, Any], market_hint: str = 'AUTO'):
     started = time.time()

@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, render_template, request
 from engine import analyze, analyze_search, search_instruments, fetch_fundamentals, fetch_recent_issues
 
-APP_VERSION = 'V78.4.1'
+APP_VERSION = 'V78.4.2'
 app = Flask(__name__)
 
 _cache_lock = threading.Lock()
