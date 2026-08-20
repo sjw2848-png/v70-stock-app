@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, render_template, request
 from engine import analyze, analyze_search, search_instruments, fetch_fundamentals, fetch_recent_issues
 
-APP_VERSION = 'V78.4.2'
+APP_VERSION = 'V78.4.3'
 app = Flask(__name__)
 
 _cache_lock = threading.Lock()
@@ -280,11 +280,18 @@ def api_portfolio_put():
             continue
         market = str(row.get('market','AUTO')).upper()
         if market not in {'AUTO','KR','ETF','US'}: market='AUTO'
-        try: avg=max(0.0,float(row.get('avg',0) or 0)); qty=max(0.0,float(row.get('qty',0) or 0))
-        except (TypeError,ValueError): avg=qty=0.0
+        try:
+            avg=max(0.0,float(row.get('avg',0) or 0)); qty=max(0.0,float(row.get('qty',0) or 0)); daily=max(0.0,float(row.get('daily_amount',0) or 0))
+        except (TypeError,ValueError):
+            avg=qty=daily=0.0
         clean.append({'id': str(row.get('id',''))[:180] or f'{typ}|{market}|{query.upper()}',
                       'type':typ,'query':query,'market':market,
                       'avg':avg if typ=='held' else 0,'qty':qty if typ=='held' else 0,
+                      'name':str(row.get('name','')).strip()[:120], 'code':str(row.get('code','')).strip()[:24],
+                      'instrument_type':str(row.get('instrument_type','')).strip()[:20], 'exchange':str(row.get('exchange','')).strip()[:30],
+                      'accumulate':bool(row.get('accumulate',False)) if typ=='held' else False,
+                      'daily_amount':daily if typ=='held' else 0,
+                      'accum_start':str(row.get('accum_start','')).strip()[:10] if typ=='held' else '',
                       'added_at':str(row.get('added_at') or _now_iso())[:40],
                       'last':row.get('last') if isinstance(row.get('last'),dict) else None})
     updated=_now_iso()

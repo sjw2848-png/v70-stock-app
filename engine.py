@@ -1343,7 +1343,7 @@ def build_held_action(held_price, held_qty, close_krw, momentum, rsi, grade, ma2
         recovery=['추세 확인 후 대응','손절선 아래에서는 물타기 금지']
     return {
         'action': action, 'reason': reason, 'pnl_pct': round(pnl_pct,2),
-        'pnl_krw': _safe_int(pnl_krw), 'held_qty': int(max(held_qty,0)),
+        'pnl_krw': _safe_int(pnl_krw), 'held_qty': round(max(held_qty,0), 6),
         'market_value_krw': _safe_int(close_krw*max(held_qty,0)),
         'add_qty': int(max(qty_add,0)) if add_allowed else 0,
         'loss_stage': ('긴급' if pnl_pct<=-12 else '위험' if pnl_pct<=-7 else '경계' if pnl_pct<=-3 else '정상'),
@@ -1704,7 +1704,7 @@ def analyze_one(code, info, market, settings, fx, market_state):
         }[grade]
 
         held_price = _safe_float(info.get('my_price'), 0)
-        held_qty = int(max(_safe_float(info.get('held_qty'), 0), 0))
+        held_qty = max(_safe_float(info.get('held_qty'), 0), 0)
         held_pnl = None
         if held_price > 0:
             held_pnl = (close_krw / held_price - 1) * 100
@@ -2082,6 +2082,8 @@ def _resolve_search_query(query: str, market_hint: str = 'AUTO'):
         '코스트코':'COST', 'COSTCO':'COST',
         '월마트':'WMT', 'WALMART':'WMT',
         'JP모건':'JPM', 'JPMORGAN':'JPM',
+        '프록터갬블':'PG', '프록터 앤 갬블':'PG', '프록터 앤드 갬블':'PG', 'PROCTER & GAMBLE':'PG', 'PROCTER AND GAMBLE':'PG',
+        '오라클':'ORCL', 'ORACLE':'ORCL',
     }
     if q in ('소룩스', 'SOLUX') and hint != 'US':
         return '290690', dict(KR_CURATED['290690']), 'KR'
@@ -2102,7 +2104,15 @@ def _resolve_search_query(query: str, market_hint: str = 'AUTO'):
 
     if hint == 'US':
         code = qu.replace(' ', '')
-        return code, {'name': code, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'tech': '추세매매'}, 'US'
+        name = code
+        try:
+            for z in _yahoo_symbol_search(code, 6):
+                if str(z.get('symbol','')).upper() == code:
+                    name = z.get('longname') or z.get('shortname') or code
+                    break
+        except Exception:
+            pass
+        return code, {'name': name, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'tech': '추세매매'}, 'US'
 
     mapping = get_krx_mapping()
     if q.isdigit():
@@ -2149,6 +2159,7 @@ _US_SEARCH_ALIASES = {
     '메타':'META', 'meta':'META', '코카콜라':'KO', 'cocacola':'KO', '월마트':'WMT', 'walmart':'WMT',
     '브로드컴':'AVGO', 'broadcom':'AVGO', '넷플릭스':'NFLX', 'netflix':'NFLX', '코스트코':'COST', 'costco':'COST',
     '제이피모건':'JPM', 'jp모건':'JPM', 'jpmorgan':'JPM',
+    '오라클':'ORCL', 'oracle':'ORCL',
 }
 
 def _search_norm(v):
@@ -2244,7 +2255,7 @@ def analyze_search(query: str, settings: Dict[str, Any], market_hint: str = 'AUT
     # Optional holding inputs from the live-search form.
     # KR average price is entered in KRW; US average price is entered in native USD.
     search_avg_price = _safe_float(settings.get('search_avg_price'), 0)
-    search_held_qty = int(max(_safe_float(settings.get('search_held_qty'), 0), 0))
+    search_held_qty = max(_safe_float(settings.get('search_held_qty'), 0), 0)
     if search_avg_price > 0:
         info = dict(info)
         info['my_price'] = search_avg_price * fx if market == 'US' else search_avg_price
