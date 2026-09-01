@@ -1,4 +1,5 @@
 import hashlib
+import secrets
 import atexit
 import json
 import os
@@ -8,10 +9,10 @@ import time
 import webbrowser
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, g
 from engine import analyze, analyze_search, search_instruments, fetch_fundamentals, fetch_recent_issues
 
-APP_VERSION = 'V78.6.2'
+APP_VERSION = 'V78.6.3'
 app = Flask(__name__)
 
 _cache_lock = threading.Lock()
@@ -30,6 +31,52 @@ PORTFOLIO_FILE = os.path.join(DATA_DIR, 'portfolio.json')
 ACCOUNTS_FILE = os.path.join(DATA_DIR, 'accounts.json')
 _portfolio_lock = threading.Lock()
 _account_lock = threading.Lock()
+ACCOUNT_COOKIE = 'v7863_account_session'
+ACCOUNT_SESSION_DAYS = max(1, min(90, int(os.environ.get('ACCOUNT_SESSION_DAYS', '30'))))
+
+def _session_token_hash(token):
+    return hashlib.sha256(str(token or '').encode('utf-8')).hexdigest()
+
+def _prune_sessions(rec):
+    now = int(time.time())
+    sessions = rec.get('sessions', []) if isinstance(rec, dict) else []
+    if not isinstance(sessions, list):
+        sessions = []
+    clean = []
+    for item in sessions:
+        if not isinstance(item, dict):
+            continue
+        if int(item.get('expires_at') or 0) > now and item.get('token_hash'):
+            clean.append(item)
+    rec['sessions'] = clean[-12:]
+    return rec
+
+def _issue_account_session(account_id):
+    token = secrets.token_urlsafe(32)
+    token_hash = _session_token_hash(token)
+    expires_at = int(time.time()) + ACCOUNT_SESSION_DAYS * 86400
+    with _account_lock:
+        accounts = _read_accounts()
+        rec = accounts.get(account_id)
+        if not isinstance(rec, dict):
+            return None
+        rec = _prune_sessions(dict(rec))
+        rec['sessions'].append({'token_hash': token_hash, 'expires_at': expires_at, 'created_at': _now_iso()})
+        rec['sessions'] = rec['sessions'][-12:]
+        accounts[account_id] = rec
+        _write_accounts(accounts)
+    return f'{account_id}.{token}', expires_at
+
+def _set_account_cookie(response, cookie_value, expires_at=None):
+    if not cookie_value:
+        return response
+    response.set_cookie(ACCOUNT_COOKIE, cookie_value, max_age=ACCOUNT_SESSION_DAYS*86400,
+                        httponly=True, samesite='Lax', secure=bool(request.is_secure), path='/')
+    return response
+
+def _clear_account_cookie(response):
+    response.delete_cookie(ACCOUNT_COOKIE, path='/', samesite='Lax', secure=bool(request.is_secure))
+    return response
 
 def _normalize_account_id(value):
     raw = str(value or '').strip().lower()
@@ -53,10 +100,37 @@ def _password_hash(password, salt_hex, iterations=180000):
     return hashlib.pbkdf2_hmac('sha256', str(password).encode('utf-8'), bytes.fromhex(salt_hex), iterations).hex()
 
 def _account_auth():
-    account_id = _normalize_account_id(request.headers.get('X-Account-ID'))
-    password = str(request.headers.get('X-Account-Password') or '')
+    # 1) Prefer a persistent HttpOnly cookie session. This keeps mobile/PWA login alive
+    # without storing the password in localStorage/sessionStorage.
+    header_account_id = _normalize_account_id(request.headers.get('X-Account-ID'))
+    header_password = str(request.headers.get('X-Account-Password') or '')
+    cookie = str(request.cookies.get(ACCOUNT_COOKIE) or '')
+    # Explicit credentials mean the user is deliberately connecting/switching accounts.
+    if not (header_account_id and header_password) and '.' in cookie:
+        cookie_id, token = cookie.split('.', 1)
+        account_id = _normalize_account_id(cookie_id)
+        token_hash = _session_token_hash(token)
+        with _account_lock:
+            accounts = _read_accounts()
+            rec = accounts.get(account_id)
+            if isinstance(rec, dict):
+                rec = _prune_sessions(dict(rec))
+                valid = any(str(x.get('token_hash')) == token_hash for x in rec.get('sessions', []))
+                accounts[account_id] = rec
+                _write_accounts(accounts)
+            else:
+                valid = False
+        if valid:
+            g.account_id = account_id
+            g.account_auth_via = 'cookie'
+            owner = hashlib.sha256(('account:' + account_id).encode('utf-8')).hexdigest()[:32]
+            return owner, None
+
+    # 2) Fall back to explicit ID/password for first login or another device.
+    account_id = header_account_id
+    password = header_password
     if not account_id or not password:
-        return None, '개인 계정 ID와 비밀번호가 필요합니다.'
+        return None, '개인 계정 연결이 필요합니다.'
     with _account_lock:
         accounts = _read_accounts()
         rec = accounts.get(account_id)
@@ -71,6 +145,8 @@ def _account_auth():
     import hmac
     if not hmac.compare_digest(actual, expected):
         return None, '개인 계정 비밀번호가 올바르지 않습니다.'
+    g.account_id = account_id
+    g.account_auth_via = 'password'
     owner = hashlib.sha256(('account:' + account_id).encode('utf-8')).hexdigest()[:32]
     return owner, None
 
@@ -322,7 +398,9 @@ def api_account_register():
             'created_at': _now_iso()
         }
         _write_accounts(accounts)
-    return jsonify({'ok': True, 'account_id': account_id, 'version': APP_VERSION})
+    cookie_value, expires_at = _issue_account_session(account_id)
+    resp = jsonify({'ok': True, 'account_id': account_id, 'version': APP_VERSION, 'session_persistent': bool(cookie_value)})
+    return _set_account_cookie(resp, cookie_value, expires_at)
 
 @app.get('/api/account/status')
 def api_account_status():
@@ -331,14 +409,21 @@ def api_account_status():
     owner, error = _account_auth()
     if error:
         return jsonify({'ok': False, 'error': error}), 401
-    return jsonify({'ok': True, 'account_id': _normalize_account_id(request.headers.get('X-Account-ID')), 'version': APP_VERSION})
+    account_id = getattr(g, 'account_id', '')
+    auth_via = getattr(g, 'account_auth_via', '')
+    cookie_value = None
+    if auth_via == 'password':
+        cookie_value, expires_at = _issue_account_session(account_id)
+    resp = jsonify({'ok': True, 'account_id': account_id, 'version': APP_VERSION,
+                    'auth_via': auth_via, 'session_persistent': True})
+    return _set_account_cookie(resp, cookie_value) if cookie_value else resp
 
 @app.post('/api/account/change-id')
 def api_account_change_id():
     if not _authorized():
         return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.'}), 401
-    old_id = _normalize_account_id(request.headers.get('X-Account-ID'))
     owner, error = _account_auth()
+    old_id = getattr(g, 'account_id', _normalize_account_id(request.headers.get('X-Account-ID')))
     if error:
         return jsonify({'ok': False, 'error': error}), 401
     payload = request.get_json(silent=True) or {}
@@ -375,7 +460,9 @@ def api_account_change_id():
             except Exception:
                 pass
             return jsonify({'ok': False, 'error': f'ID 변경 중 저장 오류가 발생했습니다: {str(exc)[:120]}'}), 500
-    return jsonify({'ok': True, 'account_id': new_id, 'version': APP_VERSION})
+    cookie_value, expires_at = _issue_account_session(new_id)
+    resp = jsonify({'ok': True, 'account_id': new_id, 'version': APP_VERSION})
+    return _set_account_cookie(resp, cookie_value, expires_at)
 
 @app.post('/api/account/change-password')
 def api_account_change_password():
@@ -384,7 +471,7 @@ def api_account_change_password():
     _owner, error = _account_auth()
     if error:
         return jsonify({'ok': False, 'error': error}), 401
-    account_id = _normalize_account_id(request.headers.get('X-Account-ID'))
+    account_id = getattr(g, 'account_id', _normalize_account_id(request.headers.get('X-Account-ID')))
     payload = request.get_json(silent=True) or {}
     new_password = str(payload.get('new_password') or '')
     if len(new_password) < 8:
@@ -396,10 +483,31 @@ def api_account_change_password():
             return jsonify({'ok': False, 'error': '현재 개인 계정을 찾을 수 없습니다.'}), 404
         salt = os.urandom(16).hex(); iterations = 210000
         rec = dict(rec)
-        rec.update({'salt': salt, 'iterations': iterations, 'password_hash': _password_hash(new_password, salt, iterations), 'updated_at': _now_iso()})
+        rec.update({'salt': salt, 'iterations': iterations, 'password_hash': _password_hash(new_password, salt, iterations), 'updated_at': _now_iso(), 'sessions': []})
         accounts[account_id] = rec
         _write_accounts(accounts)
-    return jsonify({'ok': True, 'account_id': account_id, 'version': APP_VERSION})
+    cookie_value, expires_at = _issue_account_session(account_id)
+    resp = jsonify({'ok': True, 'account_id': account_id, 'version': APP_VERSION})
+    return _set_account_cookie(resp, cookie_value, expires_at)
+
+@app.post('/api/account/logout')
+def api_account_logout():
+    # Revoke only the current browser session when possible, then clear its cookie.
+    cookie = str(request.cookies.get(ACCOUNT_COOKIE) or '')
+    if '.' in cookie:
+        account_id, token = cookie.split('.', 1)
+        account_id = _normalize_account_id(account_id)
+        token_hash = _session_token_hash(token)
+        with _account_lock:
+            accounts = _read_accounts()
+            rec = accounts.get(account_id)
+            if isinstance(rec, dict):
+                rec = _prune_sessions(dict(rec))
+                rec['sessions'] = [x for x in rec.get('sessions', []) if str(x.get('token_hash')) != token_hash]
+                accounts[account_id] = rec
+                _write_accounts(accounts)
+    resp = jsonify({'ok': True, 'version': APP_VERSION})
+    return _clear_account_cookie(resp)
 
 @app.get('/api/portfolio')
 def api_portfolio_get():
@@ -416,7 +524,9 @@ def api_portfolio_get():
     return jsonify({'ok': True, 'rows': rows,
                     'row_count': len(rows), 'checksum': _portfolio_digest(rows),
                     'updated_at': record.get('updated_at') if isinstance(record, dict) else None,
-                    'persistent': os.path.abspath(DATA_DIR).startswith('/var/data'), 'version': APP_VERSION})
+                    'persistent': os.path.abspath(DATA_DIR).startswith('/var/data'),
+                    'account_id': getattr(g, 'account_id', ''), 'auth_via': getattr(g, 'account_auth_via', ''),
+                    'version': APP_VERSION})
 
 @app.put('/api/portfolio')
 def api_portfolio_put():
