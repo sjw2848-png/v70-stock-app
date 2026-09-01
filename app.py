@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, render_template, request
 from engine import analyze, analyze_search, search_instruments, fetch_fundamentals, fetch_recent_issues
 
-APP_VERSION = 'V78.6.1'
+APP_VERSION = 'V78.6.2'
 app = Flask(__name__)
 
 _cache_lock = threading.Lock()
@@ -93,6 +93,10 @@ def _write_portfolio_store(data):
     with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, separators=(',', ':'))
     os.replace(tmp, PORTFOLIO_FILE)
+
+def _portfolio_digest(rows):
+    payload = json.dumps(rows if isinstance(rows, list) else [], ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(payload.encode('utf-8')).hexdigest()[:20]
 
 
 # Market clocks are calculated on the server with explicit time zones.
@@ -408,7 +412,9 @@ def api_portfolio_get():
         store = _read_portfolio_store()
         record = store.get(owner, {})
     rows = record.get('rows', []) if isinstance(record, dict) else []
-    return jsonify({'ok': True, 'rows': rows if isinstance(rows, list) else [],
+    rows = rows if isinstance(rows, list) else []
+    return jsonify({'ok': True, 'rows': rows,
+                    'row_count': len(rows), 'checksum': _portfolio_digest(rows),
                     'updated_at': record.get('updated_at') if isinstance(record, dict) else None,
                     'persistent': os.path.abspath(DATA_DIR).startswith('/var/data'), 'version': APP_VERSION})
 
@@ -449,10 +455,21 @@ def api_portfolio_put():
                       'target_amount': max(0.0,float(row.get('target_amount',0) or 0)) if typ=='held' else 0,
                       'added_at':str(row.get('added_at') or _now_iso())[:40],
                       'last':row.get('last') if isinstance(row.get('last'),dict) else None})
-    updated=_now_iso()
-    with _portfolio_lock:
-        store=_read_portfolio_store(); store[owner]={'rows':clean,'updated_at':updated}; _write_portfolio_store(store)
-    return jsonify({'ok':True,'rows':clean,'updated_at':updated,'version':APP_VERSION})
+    updated=_now_iso(); checksum=_portfolio_digest(clean)
+    try:
+        with _portfolio_lock:
+            store=_read_portfolio_store()
+            store[owner]={'rows':clean,'updated_at':updated,'checksum':checksum}
+            _write_portfolio_store(store)
+            # Immediate read-back verification catches disk/write problems before the UI reports success.
+            verify_store=_read_portfolio_store(); verify_record=verify_store.get(owner,{})
+            verify_rows=verify_record.get('rows',[]) if isinstance(verify_record,dict) else []
+            verified=isinstance(verify_rows,list) and len(verify_rows)==len(clean) and _portfolio_digest(verify_rows)==checksum
+        if not verified:
+            return jsonify({'ok':False,'error':'서버 저장 후 재검증에 실패했습니다.','code':'SAVE_VERIFY_FAILED','version':APP_VERSION}),500
+    except OSError as exc:
+        return jsonify({'ok':False,'error':f'서버 저장소 쓰기 오류: {str(exc)[:120]}','code':'STORAGE_WRITE_FAILED','version':APP_VERSION}),500
+    return jsonify({'ok':True,'rows':clean,'row_count':len(clean),'checksum':checksum,'verified':True,'updated_at':updated,'version':APP_VERSION})
 
 @app.delete('/api/portfolio')
 def api_portfolio_delete():
