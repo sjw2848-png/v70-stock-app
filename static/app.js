@@ -1,5 +1,5 @@
 const $=id=>document.getElementById(id);
-const SETTINGS_KEY='v78.6.3-settings', SNAPSHOT_KEY='v70-shared-last-snapshot';
+const SETTINGS_KEY='v78.7.0-settings', SNAPSHOT_KEY='v70-shared-last-snapshot';
 const HISTORY_KEY='v78.3.0-recommendation-history', RANK_KEY='v78.3.0-rank-baseline';
 const LEGACY_SNAPSHOT_KEYS=['v70.13.1-last-snapshot','v70.13-last-snapshot','v70.12-last-snapshot','v70.11-last-snapshot','v70.10-last-snapshot','v70.9-last-snapshot'];
 const fields=['budget','tradeBudget','longBudget','savingGoal','monthlySaving','currentSaving','riskPct','stopPct','minRrr','trustMode','mode','topN','held','appPin','accountId'];
@@ -10,12 +10,43 @@ const KR_HOLIDAYS_2026=new Set(['2026-01-01','2026-02-16','2026-02-17','2026-02-
 const US_HOLIDAYS_2026=new Set(['2026-01-01','2026-01-19','2026-02-16','2026-04-03','2026-05-25','2026-06-19','2026-07-03','2026-09-07','2026-11-26','2026-12-25']);
 function zoneNow(timeZone){const p={};new Intl.DateTimeFormat('en-CA',{timeZone,year:'numeric',month:'2-digit',day:'2-digit',weekday:'short',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date()).forEach(x=>{if(x.type!=='literal')p[x.type]=x.value});return{date:`${p.year}-${p.month}-${p.day}`,weekday:p.weekday,hour:Number(p.hour),minute:Number(p.minute),local_time:`${String(p.hour).padStart(2,'0')}:${String(p.minute).padStart(2,'0')}`}}
 function normalizeMarket(market){return String(market||'KR').toUpperCase()==='US'?'US':'KR'}
-function clientMarketSession(market){const m=normalizeMarket(market),isUS=m==='US',z=zoneNow(isUS?'America/New_York':'Asia/Seoul'),mins=z.hour*60+z.minute,weekend=z.weekday==='Sat'||z.weekday==='Sun',holiday=(isUS?US_HOLIDAYS_2026:KR_HOLIDAYS_2026).has(z.date),open=isUS?570:540,close=isUS?960:930;if(weekend||holiday)return{market:m,open:false,state:'closed',label:weekend?'주말 휴장':'공휴일 휴장',date:z.date,local_time:z.local_time};if(mins<open)return{market:m,open:false,state:'pre',label:'장전',date:z.date,local_time:z.local_time};if(mins>=close)return{market:m,open:false,state:'after',label:'장 마감',date:z.date,local_time:z.local_time};return{market:m,open:true,state:'regular',label:'정규장 거래중',date:z.date,local_time:z.local_time}}
+function clientMarketSession(market){
+ const m=normalizeMarket(market),isUS=m==='US',z=zoneNow(isUS?'America/New_York':'Asia/Seoul'),mins=z.hour*60+z.minute,weekend=z.weekday==='Sat'||z.weekday==='Sun',holiday=(isUS?US_HOLIDAYS_2026:KR_HOLIDAYS_2026).has(z.date);
+ let state='closed',label='장 마감',open=false,extended_open=false;
+ if(weekend||holiday){state='closed';label=weekend?'주말 휴장':'공휴일 휴장'}
+ else if(!isUS){
+  if(mins<510){state='pre_wait';label='개장 전'}
+  else if(mins<540){state='preopen';label='시가 동시호가'}
+  else if(mins<930){state='regular';label='정규장 거래중';open=true}
+  else if(mins<940){state='post_wait';label='정규장 종료·시간외 대기'}
+  else if(mins<1080){state='post';label='시간외 거래';extended_open=true}
+  else{state='after';label='장 마감'}
+ }else{
+  if(mins<240){state='pre_wait';label='프리마켓 대기'}
+  else if(mins<570){state='premarket';label='프리마켓';extended_open=true}
+  else if(mins<960){state='regular';label='정규장 거래중';open=true}
+  else if(mins<1200){state='afterhours';label='애프터마켓';extended_open=true}
+  else{state='after';label='장 마감'}
+ }
+ return{market:m,open,regular_open:open,extended_open,tradable:open||extended_open,state,label,date:z.date,local_time:z.local_time,policy:'regular_session_only_for_immediate_signal'}
+}
 function marketSession(market){const m=normalizeMarket(market);const s=serverSessions&&serverSessions[m];return s&&typeof s.open==='boolean'?s:clientMarketSession(m)}
-function sessionForItem(x){const market=(x&&x.market)==='US'||(x&&x.category)==='US'?'US':'KR';return marketSession(market)}
-function closedActionText(x,base='관심 후보'){const s=sessionForItem(x);if(s.open)return base;if(s.state==='pre')return `⏰ 장전 · ${base}`;return `📅 ${s.label} · 다음 장 ${base}`}
-function immediateAllowed(x){return sessionForItem(x).open}
+function itemMarket(x){return (x&&((x.market==='US')||(x.category==='US')))?'US':'KR'}
+function sessionForItem(x){return marketSession(itemMarket(x))}
+function phaseActionLabel(s){if(s.open)return'정규장 거래 가능';if(s.state==='premarket')return'프리마켓 관찰';if(s.state==='afterhours')return'애프터마켓 관찰';if(s.state==='preopen')return'동시호가 관찰';if(s.state==='post')return'시간외 관찰';return s.label}
+function closedActionText(x,base='관심 후보'){const s=sessionForItem(x);if(s.open)return base;if(['premarket','preopen'].includes(s.state))return `⏰ ${s.label} · ${base}`;if(s.state==='pre_wait')return `⏳ ${s.label} · ${base}`;return `📅 ${s.label} · 다음 정규장 ${base}`}
+function immediateAllowed(x){return sessionForItem(x).open===true}
 function sessionSummary(){const kr=marketSession('KR'),us=marketSession('US');return `🇰🇷 한국 ${kr.label} ${kr.local_time||''} · 🇺🇸 미국 ${us.label} ${us.local_time||''}`.trim()}
+function marketCandidateStats(valid){
+ const buy=valid.filter(x=>candidateTier(x)==='buy');
+ const krStock=buy.filter(x=>itemMarket(x)==='KR'&&x.category!=='ETF'),krEtf=buy.filter(x=>x.category==='ETF'),usStock=buy.filter(x=>itemMarket(x)==='US');
+ return{buy,krStock,krEtf,usStock,krAll:[...krStock,...krEtf],usAll:usStock};
+}
+function renderMarketDecisionGrid(valid){
+ const box=$('marketDecisionGrid');if(!box)return;const st=marketCandidateStats(valid);
+ const mk=(m,arr)=>{const s=marketSession(m),openNow=arr.filter(immediateAllowed).length,waiting=arr.length-openNow,flag=m==='US'?'🇺🇸':'🇰🇷',name=m==='US'?'미국':'한국';return `<div class="market-decision ${s.open?'market-open':'market-closed'}"><div><b>${flag} ${name}</b><span>${escapeText(s.label)} · ${escapeText(s.local_time||'')}</span></div><strong>${s.open?(openNow?`즉시 후보 ${openNow}개`:'정규장 열림 · 기준통과 0개'):(waiting?`다음 정규장 후보 ${waiting}개`:'대기 · 기준통과 0개')}</strong><small>${s.open?'정규장 신호만 즉시 후보로 사용':s.extended_open?'연장거래 시간은 관찰만 · 즉시신호 제외':'정규장 재개 후 다시 검증'}</small></div>`};
+ box.innerHTML=mk('KR',st.krAll)+mk('US',st.usAll);
+}
 function fmt(n){return Number(n||0).toLocaleString('ko-KR')}
 function compact(n){if(n===null||n===undefined)return'-';const v=Number(n);if(!Number.isFinite(v))return'-';return new Intl.NumberFormat('ko-KR',{notation:'compact',maximumFractionDigits:1}).format(v)}
 function pct(n){if(n===null||n===undefined)return'-';const v=Number(n);return`${v>=0?'+':''}${v.toFixed(2)}%`}
@@ -47,7 +78,7 @@ function feedbackStats(rows){
 function renderFeedback(){const box=$('feedbackEngine'),history=loadJson(HISTORY_KEY,[]),st=feedbackStats(history);if(!box)return;if(!st){box.innerHTML='<div class="quality-empty">D+5 완료 기록이 쌓이면 전략·시장국면별 자동 피드백을 표시합니다.</div>';return}const fmtGroup=(title,arr)=>`<div class="feedback-group"><b>${title}</b>${arr.slice(0,5).map(x=>`<span>${escapeText(x.k)} · ${x.n}건 · 승 ${x.win.toFixed(0)}% · 평균 ${perfCell(x.avg)}</span>`).join('')}</div>`;let calibration=st.brier<=.20?'양호':st.brier<=.25?'보통':'주의';const done=history.filter(r=>r.d5_return!==null&&r.d5_return!==undefined),recent=done.slice(0,20),base=done.slice(20);let drift='표본부족',driftClass='';if(recent.length>=10&&base.length>=10){const rw=recent.filter(r=>Number(r.d5_return)>0).length/recent.length*100,bw=base.filter(r=>Number(r.d5_return)>0).length/base.length*100,delta=rw-bw;drift=delta<=-15?'위험':delta<=-8?'주의':'정상';driftClass=` · 최근-기준 ${delta>=0?'+':''}${delta.toFixed(0)}%p`;}box.innerHTML=`<div class="feedback-kpis"><span>모델 드리프트<b>${drift}${driftClass}</b></span><span>D+5 표본<b>${st.n}건</b></span><span>실현 플러스 비율<b>${st.win.toFixed(0)}%</b></span><span>평균수익<b>${perfCell(st.avg)}</b></span><span>확률오차(Brier)<b>${st.brier.toFixed(3)} · ${calibration}</b></span></div>${fmtGroup('전략별',st.byTech)}${fmtGroup('시장국면별',st.byRegime)}${fmtGroup('추천유형별',st.byLane)}<p class="quality-note">Brier는 0에 가까울수록 저장 당시 추정확률과 실제 D+5 방향이 잘 맞았다는 뜻입니다. 표본 20건 미만은 결론보다 관찰용으로 보세요.</p>`}
 function saveSettings(){const d={};fields.forEach(k=>d[k]=$(k).value);localStorage.setItem(SETTINGS_KEY,JSON.stringify(d))}
 function saveAccountSecret(){try{sessionStorage.setItem(ACCOUNT_SECRET_KEY,String($('accountPassword')?.value||''))}catch(e){}}
-function loadSettings(){try{let raw=localStorage.getItem(SETTINGS_KEY);if(!raw){raw=localStorage.getItem('v78.6.1-settings')||localStorage.getItem('v78.6.0-settings')||localStorage.getItem('v78.3.0-settings')||localStorage.getItem('v78.1.0-settings')||localStorage.getItem('v70.14.2-settings')||localStorage.getItem('v70.14.1-settings');if(raw){const old=JSON.parse(raw||'{}');delete old.accountPassword;localStorage.setItem(SETTINGS_KEY,JSON.stringify(old));raw=JSON.stringify(old)}}const d=JSON.parse(raw||'{}');fields.forEach(k=>{if(d[k]!==undefined)$(k).value=d[k]});const pw=sessionStorage.getItem(ACCOUNT_SECRET_KEY)||'';if($('accountPassword'))$('accountPassword').value=pw;for(const k of ['v78.6.1-settings','v78.6.0-settings','v78.5.0-settings']){try{const od=JSON.parse(localStorage.getItem(k)||'null');if(od&&od.accountPassword!==undefined){delete od.accountPassword;localStorage.setItem(k,JSON.stringify(od))}}catch(_){}}}catch(e){}}
+function loadSettings(){try{let raw=localStorage.getItem(SETTINGS_KEY);if(!raw){raw=localStorage.getItem('v78.6.3-settings')||localStorage.getItem('v78.6.2-settings')||localStorage.getItem('v78.6.1-settings')||localStorage.getItem('v78.6.0-settings')||localStorage.getItem('v78.3.0-settings')||localStorage.getItem('v78.1.0-settings')||localStorage.getItem('v70.14.2-settings')||localStorage.getItem('v70.14.1-settings');if(raw){const old=JSON.parse(raw||'{}');delete old.accountPassword;localStorage.setItem(SETTINGS_KEY,JSON.stringify(old));raw=JSON.stringify(old)}}const d=JSON.parse(raw||'{}');fields.forEach(k=>{if(d[k]!==undefined)$(k).value=d[k]});const pw=sessionStorage.getItem(ACCOUNT_SECRET_KEY)||'';if($('accountPassword'))$('accountPassword').value=pw;for(const k of ['v78.6.3-settings','v78.6.2-settings','v78.6.1-settings','v78.6.0-settings','v78.5.0-settings']){try{const od=JSON.parse(localStorage.getItem(k)||'null');if(od&&od.accountPassword!==undefined){delete od.accountPassword;localStorage.setItem(k,JSON.stringify(od))}}catch(_){}}}catch(e){}}
 fields.forEach(k=>$(k).addEventListener('change',saveSettings));
 function settingsPayload(){return{budget:Number($('budget').value||0),trade_budget:Number($('tradeBudget').value||0),long_budget:Number($('longBudget').value||0),saving_goal_krw:Number($('savingGoal').value||1000000),monthly_saving_krw:Number($('monthlySaving').value||100000),current_saving_krw:Number($('currentSaving').value||0),risk_pct:Number($('riskPct').value||0),stop_pct:Number($('stopPct').value||0),min_rrr:Number($('minRrr').value||1.5),trust_mode:$('trustMode').value,mode:$('mode').value,top_n:Number($('topN').value||60),held:$('held').value.trim()}}
 function updateMoneyNote(){const budget=Number($('budget').value||0),trade=Number($('tradeBudget').value||0),risk=Number($('riskPct').value||0);$('moneyNote').textContent=`현재 설정: 전체 ${fmt(budget)}원 · 종목당 ${fmt(trade)}원 · 최대 허용손실 ${fmt(budget*risk/100)}원`}
@@ -99,29 +130,39 @@ function renderScalpFocus(data){
 }
 function renderFinalAction(data){
  const grid=$('finalActionGrid'),risk=$('finalActionRisk');grid.innerHTML='';
- const buys=sessionSorted(allResults.filter(x=>x.ok&&x.category!=='ETF'&&candidateTier(x)==='buy')),
-       watches=sessionSorted(allResults.filter(x=>x.ok&&x.category!=='ETF'&&candidateTier(x)==='watch')),
-       etfBuys=sessionSorted(allResults.filter(x=>x.ok&&x.category==='ETF'&&candidateTier(x)==='buy')),
-       etfWatch=sessionSorted(allResults.filter(x=>x.ok&&x.category==='ETF'&&candidateTier(x)==='watch')),
-       scalps=[...(data.scalp_candidates||[])].sort((a,b)=>Number(marketSession(b.category||b.market||'KR').open)-Number(marketSession(a.category||a.market||'KR').open)||Number(b.score||0)-Number(a.score||0)),
-       scalp=scalps[0];
+ const valid=allResults.filter(x=>x.ok),st=marketCandidateStats(valid);
+ const krStockBuy=sessionSorted(st.krStock),krStockWatch=sessionSorted(valid.filter(x=>itemMarket(x)==='KR'&&x.category!=='ETF'&&candidateTier(x)==='watch'));
+ const krEtfBuy=sessionSorted(st.krEtf),krEtfWatch=sessionSorted(valid.filter(x=>x.category==='ETF'&&candidateTier(x)==='watch'));
+ const usBuy=sessionSorted(st.usStock),usWatch=sessionSorted(valid.filter(x=>itemMarket(x)==='US'&&candidateTier(x)==='watch'));
+ const near=sessionSorted(valid.filter(x=>candidateTier(x)==='watch'))[0];
  const lanes=[
-   {title:'🔥 개별주 1순위',kind:'buy',x:buys[0]||watches[0],isBuy:!!buys[0]},
-   {title:'⚡ 단타 1순위',kind:'scalp',x:scalp,isBuy:!!scalp},
-   {title:'🛡️ ETF 1순위',kind:'etf',x:etfBuys[0]||etfWatch[0],isBuy:!!etfBuys[0]},
-   {title:'👀 진입 임박',kind:'watch',x:watches[0],isBuy:false}
+  {title:'🇰🇷 한국 개별주',x:krStockBuy[0]||krStockWatch[0],isBuy:!!krStockBuy[0]},
+  {title:'🇰🇷 한국 ETF',x:krEtfBuy[0]||krEtfWatch[0],isBuy:!!krEtfBuy[0]},
+  {title:'🇺🇸 미국 종목',x:usBuy[0]||usWatch[0],isBuy:!!usBuy[0]},
+  {title:'👀 진입 임박',x:near,isBuy:false}
  ];
- lanes.forEach(l=>{const d=document.createElement('div');d.className=`final-action-item final-${l.kind}`;if(!l.x){d.innerHTML=`<div class="final-action-title">${l.title}</div><b>현재 후보 없음</b><small>조건을 충족하는 종목이 생기면 표시합니다.</small>`;grid.appendChild(d);return}
-   if(l.kind==='scalp'){const x=l.x,sess=marketSession(x.category||x.market||'KR'),live=sess.open;d.innerHTML=`<div class="final-action-title">${l.title}<span>${live?'⚡ 관찰 가능':escapeText(sess.label)}</span></div><b>${escapeText(x.name)}</b><strong>${Number(x.score||0).toFixed(0)}점 · ${x.qty}주 이내</strong><div class="final-action-prices"><span>진입 ${fmt(x.entry_krw)}원</span><span>목표 ${fmt(x.target_krw)}원</span><span>손절 ${fmt(x.stop_krw)}원</span></div><small>${live?'🕒 '+escapeText(x.buy_time||'-'):'📅 현재 주문 신호 아님 · 다음 '+(sess.market==='US'?'미국장':'한국장')+' 재확인'} · ${escapeText(x.trigger||'')}</small><div class="final-risk-mini">${escapeText(sess.market==='US'?'🇺🇸 미국':'🇰🇷 한국')} ${escapeText(sess.label)} ${escapeText(sess.local_time||'')} · 예상 제한손실 ${fmt(x.planned_risk_krw)}원</div>`}
-   else{const x=l.x,rb=rankBadge(x),sess=sessionForItem(x),live=l.isBuy&&sess.open;d.innerHTML=`<div class="final-action-title">${l.title}<span>${live?'✅ 지금 기준통과':l.isBuy?'📅 다음 장 관심':'🟡 대기'}</span></div><b>${escapeText(x.name)}</b><strong>기회 ${Number(x.opportunity_score||0).toFixed(0)}점 · ${x.qty>0?x.qty+'주':'대기'}</strong>${rb?`<div class="rank-move">${escapeText(rb)}</div>`:''}<div class="final-action-prices"><span>진입 ${fmt(x.entry_krw)}원</span><span>목표 ${fmt(x.target1_krw)}원</span><span>손절 ${fmt(x.stop1_krw)}원</span></div><small>${sess.open?'🕒 '+escapeText(x.buy_time||'-'):'📅 '+escapeText(sess.label)+' · 현재 주문 신호 아님'} · ${escapeText(x.tech||'')}</small><div class="final-risk-mini">${sess.market==='US'?'🇺🇸 미국':'🇰🇷 한국'} ${escapeText(sess.label)} ${escapeText(sess.local_time||'')} · 예상손실 ${fmt(x.planned_risk_krw)}원 / 허용 ${fmt(x.max_loss_krw)}원</div>`}grid.appendChild(d)});
- risk.innerHTML=`🧮 <b>시장별 독립 판정:</b> ${escapeText(sessionSummary())}<br><b>위험기반 수량:</b> 전체 투자금의 ${Number($('riskPct').value||0).toFixed(1)}% 허용손실과 종목당 ${fmt($('tradeBudget').value)}원 예산 중 더 작은 수량을 사용합니다.`
+ lanes.forEach((l,i)=>{const d=document.createElement('div');d.className=`final-action-item final-${i}`;if(!l.x){d.innerHTML=`<div class="final-action-title">${l.title}</div><b>현재 후보 없음</b><small>해당 시장·유형에서 조건을 충족하면 표시합니다.</small>`;grid.appendChild(d);return}
+  const x=l.x,rb=rankBadge(x),sess=sessionForItem(x),live=l.isBuy&&sess.open,status=live?'✅ 정규장 기준통과':l.isBuy?`⏳ ${phaseActionLabel(sess)}`:'🟡 관찰';
+  d.innerHTML=`<div class="final-action-title">${l.title}<span>${escapeText(status)}</span></div><b>${escapeText(x.name)}</b><strong>기회 ${Number(x.opportunity_score||0).toFixed(0)}점 · ${live&&x.qty>0?x.qty+'주':'대기'}</strong>${rb?`<div class="rank-move">${escapeText(rb)}</div>`:''}<div class="final-action-prices"><span>진입 ${fmt(x.entry_krw)}원</span><span>목표 ${fmt(x.target1_krw)}원</span><span>손절 ${fmt(x.stop1_krw)}원</span></div><small>${sess.open?'🕒 '+escapeText(x.buy_time||'-'):'🚫 현재 즉시주문 신호 아님 · '+escapeText(sess.label)} · ${escapeText(x.tech||'')}</small><div class="final-risk-mini">${sess.market==='US'?'🇺🇸 미국':'🇰🇷 한국'} ${escapeText(sess.label)} ${escapeText(sess.local_time||'')} · 예상손실 ${fmt(x.planned_risk_krw)}원 / 허용 ${fmt(x.max_loss_krw)}원</div>`;grid.appendChild(d)});
+ risk.innerHTML=`🧮 <b>시장별 독립 판정:</b> ${escapeText(sessionSummary())}<br><b>정확화 원칙:</b> 프리마켓·시간외·동시호가는 관찰구간으로만 표시하고, 즉시 매수 후보는 정규장 안에서만 승격합니다.<br><b>위험기반 수량:</b> 전체 투자금의 ${Number($('riskPct').value||0).toFixed(1)}% 허용손실과 종목당 ${fmt($('tradeBudget').value)}원 예산 중 더 작은 수량을 사용합니다.`
 }
+
 function overallDecision(){
- const card=$('answerCard');card.className='answer-card card';const valid=allResults.filter(x=>x.ok),greens=valid.filter(x=>x.category!=='ETF'&&candidateTier(x)==='buy'),etfGreens=valid.filter(x=>x.category==='ETF'&&candidateTier(x)==='buy'),openGreens=greens.filter(immediateAllowed),openEtf=etfGreens.filter(immediateAllowed),kr=marketSession('KR'),us=marketSession('US');
- if(openGreens.length||openEtf.length){const pool=sortedDefault([...openGreens,...openEtf]),best=pool[0];card.classList.add('answer-yes');$('answerWord').textContent='YES';$('answerTitle').textContent='현재 열린 시장에 매수 후보가 있습니다';$('answerText').textContent=`${best.name}이 현재 거래 가능한 시장에서 가장 앞섭니다. 종목별 시장 상태와 가격·손절·수량을 확인하세요.`;$('answerMini').textContent=`${sessionSummary()} · 지금 매수 후보 ${openGreens.length+openEtf.length}개`;return{state:'YES',best}}
- if(greens.length||etfGreens.length){card.classList.add('answer-wait');$('answerWord').textContent='WAIT';$('answerTitle').textContent='후보는 있지만 해당 시장이 지금 열려 있지 않습니다';$('answerText').textContent='한국장과 미국장을 따로 판정합니다. 닫힌 시장의 후보는 다음 장 관심후보로만 보고, 열린 시장에서 기준을 통과한 종목이 생길 때만 즉시 매수 후보로 표시합니다.';$('answerMini').textContent=`${sessionSummary()} · 다음 장 관심후보 ${greens.length+etfGreens.length}개`;return{state:'WAIT',best:null}}
- card.classList.add('answer-no');$('answerWord').textContent='NO';$('answerTitle').textContent='현재 기준을 통과한 매수 후보가 없습니다';$('answerText').textContent='시장 개장 여부와 별개로 설정 기준을 통과한 후보가 없습니다. 조건이 좋아질 때까지 기다립니다.';$('answerMini').textContent=`${sessionSummary()} · 분석 ${valid.length}개`;return{state:'NO',best:null}
+ const card=$('answerCard');card.className='answer-card card';const valid=allResults.filter(x=>x.ok),st=marketCandidateStats(valid),kr=marketSession('KR'),us=marketSession('US');
+ const openKR=st.krAll.filter(immediateAllowed),openUS=st.usAll.filter(immediateAllowed),open=[...openKR,...openUS];
+ renderMarketDecisionGrid(valid);
+ if(open.length){const best=sortedDefault(open)[0],m=itemMarket(best)==='US'?'미국':'한국';card.classList.add('answer-yes');$('answerWord').textContent='YES';$('answerTitle').textContent=`${m} 정규장에 매수 후보가 있습니다`;$('answerText').textContent=`${best.name}이 현재 정규장 기준을 통과했습니다. 진입가·손절·수량을 확인하고 분할 접근하세요.`;$('answerMini').textContent=`${sessionSummary()} · 정규장 즉시 후보 ${open.length}개`;return{state:'YES',best}}
+ if(st.buy.length){
+  card.classList.add('answer-wait');$('answerWord').textContent='WAIT';
+  const krHas=st.krAll.length>0,usHas=st.usAll.length>0;
+  if(kr.open&&!krHas&&usHas&&!us.open){$('answerTitle').textContent='한국장은 열려 있지만 한국 매수 후보는 없고, 미국 후보는 대기 중입니다';$('answerText').textContent=`미국 후보 ${st.usAll[0]?.name||''} 등은 ${us.label} 상태이므로 즉시 매수 신호로 올리지 않습니다. 한국장은 정규장 중이지만 현재 기준을 통과한 한국 후보가 없습니다.`}
+  else if(us.open&&!usHas&&krHas&&!kr.open){$('answerTitle').textContent='미국장은 열려 있지만 미국 매수 후보는 없고, 한국 후보는 다음 장 대기입니다';$('answerText').textContent=`한국 후보는 ${kr.label} 상태라 다음 정규장 재검증 대상으로 둡니다. 미국 정규장에서는 현재 기준통과 후보가 없습니다.`}
+  else{const markets=[krHas?'한국':'',usHas?'미국':''].filter(Boolean).join('·');$('answerTitle').textContent=`${markets} 후보는 있지만 현재 즉시 매수 가능한 정규장 후보는 없습니다`;$('answerText').textContent='시장별로 독립 판정하며 프리마켓·시간외·동시호가 후보는 관찰 대상으로만 유지합니다. 해당 시장의 다음 정규장에서 가격·거래량·갭을 다시 검증합니다.'}
+  $('answerMini').textContent=`${sessionSummary()} · 다음 정규장 후보 ${st.buy.length}개`;return{state:'WAIT',best:null}
+ }
+ card.classList.add('answer-no');$('answerWord').textContent='NO';$('answerTitle').textContent='현재 기준을 통과한 매수 후보가 없습니다';$('answerText').textContent=`${kr.open?'한국 정규장은 열려 있으나 기준통과 후보가 없습니다.':'한국 '+kr.label+'입니다.'} ${us.open?'미국 정규장은 열려 있으나 기준통과 후보가 없습니다.':'미국 '+us.label+'입니다.'} 시장이 열려 있다는 이유만으로 후보를 만들지 않습니다.`;$('answerMini').textContent=`${sessionSummary()} · 분석 ${valid.length}개`;return{state:'NO',best:null}
 }
+
 function signalClass(el,state){el.classList.remove('good','warn','bad');el.classList.add(state)}
 function renderJudgeSix(tpl,item){
  const budget=tpl.querySelector('.j-budget'),rr=tpl.querySelector('.j-rrr'),mo=tpl.querySelector('.j-mom'),vo=tpl.querySelector('.j-vol'),tr=tpl.querySelector('.j-trend'),cf=tpl.querySelector('.j-conf');
@@ -212,7 +253,7 @@ document.querySelectorAll('[data-trade]').forEach(btn=>btn.addEventListener('cli
 async function analyze(){saveSettings();const btn=$('analyzeBtn');btn.disabled=true;btn.textContent='분석 중…';showInitialLoading();$('status').textContent=allResults.length?'저장 결과를 보여주는 동안 최신 시장·종목을 갱신 중입니다.':'빠른 스마트 분석 중입니다. 처음에는 10~30초 정도 걸릴 수 있습니다.';try{const headers={'Content-Type':'application/json'},pin=$('appPin').value.trim();if(pin)headers['X-App-Pin']=pin;const res=await fetch('/api/analyze',{method:'POST',headers,body:JSON.stringify(settingsPayload())});const data=await res.json();if(!res.ok||!data.ok)throw new Error(data.error||'분석 실패');serverSessions=data.sessions||serverSessions;annotateRankChanges(data);updateRecommendationHistory(data);renderData(data);saveSnapshot(data);saveRankBaseline(data);$('status').textContent=`분석 완료 · 정상 ${data.summary.valid}/${data.summary.total}개 · 분석군 ${data.summary.universe_size??data.summary.total}개 · ${data.summary.elapsed_sec}초${data.cache_hit?' · 캐시 사용':''}`}catch(e){showInitialError(e.message);$('status').textContent=`최신 분석 오류: ${e.message}${allResults.length?' · 저장된 결과를 유지합니다.':''}`}finally{btn.disabled=false;btn.textContent='최신 분석'}}
 $('analyzeBtn').addEventListener('click',analyze);$('clearHistoryBtn').addEventListener('click',()=>{localStorage.removeItem(HISTORY_KEY);renderPerformance();renderFeedback();$('status').textContent='추천 사후 성적표 기록을 삭제했습니다.'});$('clearSavedBtn').addEventListener('click',()=>{localStorage.removeItem(SNAPSHOT_KEY);allResults=[];$('cards').innerHTML='';$('topPick').hidden=true;$('noBuyCard').hidden=true;$('status').textContent='저장 결과를 삭제했습니다.'});
 async function checkConnection(){try{const r=await fetch('/health',{cache:'no-store'}),d=await r.json();if(!r.ok||!d.ok)throw new Error();serverSessions=d.sessions||serverSessions;$('onlineState').textContent=`온라인 · ${d.version}`;$('onlineDot').classList.add('ok');$('connectionText').textContent=d.pin_required?'온라인 접속 · PIN 보호 사용 중':'온라인 접속 가능 · 홈 화면 추가 지원'}catch(e){$('onlineState').textContent='서버 연결 안 됨';$('onlineDot').classList.add('bad')}}
-$('shareBtn').addEventListener('click',async()=>{const d={title:'V78.6.3 개인계정 관리·장기모으기판',text:'최종 행동판 + 순위변화 + 추천 사후 성적표 + 위험기반 수량' ,url:location.href};try{if(navigator.share)await navigator.share(d);else{await navigator.clipboard.writeText(location.href);$('status').textContent='주소를 복사했습니다.'}}catch(e){}});window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('installBtn').classList.remove('hidden')});$('installBtn').addEventListener('click',async()=>{if(!installPrompt)return;installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;$('installBtn').classList.add('hidden')});document.querySelectorAll('.bottom-nav button').forEach(btn=>btn.addEventListener('click',()=>{if(btn.dataset.action==='held'){portfolioMode='held';renderPortfolio();if(accountConnected)portfolioCloudLoad(false,{force:true});$('portfolioCenter')?.scrollIntoView({behavior:'smooth',block:'start'});return}const el=$(btn.dataset.scroll);if(el)el.scrollIntoView({behavior:'smooth',block:'start'})}));
+$('shareBtn').addEventListener('click',async()=>{const d={title:'V78.7.0 개인계정 관리·장기모으기판',text:'최종 행동판 + 순위변화 + 추천 사후 성적표 + 위험기반 수량' ,url:location.href};try{if(navigator.share)await navigator.share(d);else{await navigator.clipboard.writeText(location.href);$('status').textContent='주소를 복사했습니다.'}}catch(e){}});window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('installBtn').classList.remove('hidden')});$('installBtn').addEventListener('click',async()=>{if(!installPrompt)return;installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;$('installBtn').classList.add('hidden')});document.querySelectorAll('.bottom-nav button').forEach(btn=>btn.addEventListener('click',()=>{if(btn.dataset.action==='held'){portfolioMode='held';renderPortfolio();if(accountConnected)portfolioCloudLoad(false,{force:true});$('portfolioCenter')?.scrollIntoView({behavior:'smooth',block:'start'});return}const el=$(btn.dataset.scroll);if(el)el.scrollIntoView({behavior:'smooth',block:'start'})}));
 loadSettings();updateMoneyNote();const restored=restoreSnapshot();checkConnection();setTimeout(()=>analyze(),restored?1200:450);if('serviceWorker'in navigator){navigator.serviceWorker.register('/static/sw.js').then(reg=>reg.update()).catch(()=>{});navigator.serviceWorker.addEventListener('controllerchange',()=>{if(!sessionStorage.getItem('v7863-reloaded')){sessionStorage.setItem('v7863-reloaded','1');location.reload()}})}
 
 // V78.3 — persistent holdings + watchlist center

@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, render_template, request, g
 from engine import analyze, analyze_search, search_instruments, fetch_fundamentals, fetch_recent_issues
 
-APP_VERSION = 'V78.6.3'
+APP_VERSION = 'V78.7.0'
 app = Flask(__name__)
 
 _cache_lock = threading.Lock()
@@ -188,26 +188,57 @@ US_HOLIDAYS_2026 = {
 }
 
 def _market_session(market):
+    """Return market phase with regular-session truth kept separate from extended-hours availability.
+
+    `open` intentionally means *regular session open* so recommendation logic never upgrades an
+    extended-hours observation into an immediate-buy signal.
+    """
     market = 'US' if str(market).upper() == 'US' else 'KR'
     tz = ZoneInfo('America/New_York') if market == 'US' else ZoneInfo('Asia/Seoul')
     now = datetime.now(tz)
     date_key = now.strftime('%Y-%m-%d')
     weekend = now.weekday() >= 5
     holiday = date_key in (US_HOLIDAYS_2026 if market == 'US' else KR_HOLIDAYS_2026)
-    open_min, close_min = ((9 * 60 + 30), (16 * 60)) if market == 'US' else ((9 * 60), (15 * 60 + 30))
     mins = now.hour * 60 + now.minute
+    state = 'closed'; label = '장 마감'; regular_open = False; extended_open = False
+
     if weekend or holiday:
-        state = 'closed'; label = '주말 휴장' if weekend else '공휴일 휴장'; is_open = False
-    elif mins < open_min:
-        state = 'pre'; label = '장전'; is_open = False
-    elif mins >= close_min:
-        state = 'after'; label = '장 마감'; is_open = False
+        state = 'closed'; label = '주말 휴장' if weekend else '공휴일 휴장'
+    elif market == 'KR':
+        # KRX: opening-auction order receipt 08:30~09:00, regular 09:00~15:30,
+        # post-market sessions begin again at 15:40 and continue to 18:00.
+        if mins < 8 * 60 + 30:
+            state = 'pre_wait'; label = '개장 전'
+        elif mins < 9 * 60:
+            state = 'preopen'; label = '시가 동시호가'
+        elif mins < 15 * 60 + 30:
+            state = 'regular'; label = '정규장 거래중'; regular_open = True
+        elif mins < 15 * 60 + 40:
+            state = 'post_wait'; label = '정규장 종료·시간외 대기'
+        elif mins < 18 * 60:
+            state = 'post'; label = '시간외 거래'; extended_open = True
+        else:
+            state = 'after'; label = '장 마감'
     else:
-        state = 'regular'; label = '정규장 거래중'; is_open = True
+        # Nasdaq: pre-market 04:00~09:30 ET, regular 09:30~16:00 ET, after-hours 16:00~20:00 ET.
+        if mins < 4 * 60:
+            state = 'pre_wait'; label = '프리마켓 대기'
+        elif mins < 9 * 60 + 30:
+            state = 'premarket'; label = '프리마켓'; extended_open = True
+        elif mins < 16 * 60:
+            state = 'regular'; label = '정규장 거래중'; regular_open = True
+        elif mins < 20 * 60:
+            state = 'afterhours'; label = '애프터마켓'; extended_open = True
+        else:
+            state = 'after'; label = '장 마감'
+
     return {
-        'market': market, 'open': is_open, 'state': state, 'label': label,
-        'date': date_key, 'local_time': now.strftime('%H:%M'),
-        'timezone': 'America/New_York' if market == 'US' else 'Asia/Seoul'
+        'market': market, 'open': regular_open, 'regular_open': regular_open,
+        'extended_open': extended_open, 'tradable': regular_open or extended_open,
+        'state': state, 'label': label, 'date': date_key,
+        'local_time': now.strftime('%H:%M'),
+        'timezone': 'America/New_York' if market == 'US' else 'Asia/Seoul',
+        'policy': 'regular_session_only_for_immediate_signal'
     }
 
 def _market_sessions():
