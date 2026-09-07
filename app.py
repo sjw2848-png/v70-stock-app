@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, render_template, request, g
 from engine import analyze, analyze_search, search_instruments, fetch_fundamentals, fetch_recent_issues
 
-APP_VERSION = 'V78.7.0'
+APP_VERSION = 'V78.7.1'
 app = Flask(__name__)
 
 _cache_lock = threading.Lock()
@@ -28,6 +28,7 @@ APP_PIN = os.environ.get('APP_PIN', '').strip()
 DATA_DIR = os.environ.get('DATA_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data'))
 os.makedirs(DATA_DIR, exist_ok=True)
 PORTFOLIO_FILE = os.path.join(DATA_DIR, 'portfolio.json')
+PORTFOLIO_BACKUP_FILE = os.path.join(DATA_DIR, 'portfolio.backup.json')
 ACCOUNTS_FILE = os.path.join(DATA_DIR, 'accounts.json')
 _portfolio_lock = threading.Lock()
 _account_lock = threading.Lock()
@@ -88,7 +89,12 @@ def _read_accounts():
             data = json.load(f)
             return data if isinstance(data, dict) else {}
     except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return {}
+        try:
+            with open(PORTFOLIO_BACKUP_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return data if isinstance(data, dict) else {}
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return {}
 
 def _write_accounts(data):
     tmp = ACCOUNTS_FILE + '.tmp'
@@ -165,9 +171,21 @@ def _read_portfolio_store():
         return {}
 
 def _write_portfolio_store(data):
+    # Keep the last valid full store before replacement so an app upgrade cannot silently destroy portfolios.
+    try:
+        if os.path.exists(PORTFOLIO_FILE) and os.path.getsize(PORTFOLIO_FILE) > 2:
+            with open(PORTFOLIO_FILE, 'r', encoding='utf-8') as src:
+                previous = json.load(src)
+            if isinstance(previous, dict):
+                btmp = PORTFOLIO_BACKUP_FILE + '.tmp'
+                with open(btmp, 'w', encoding='utf-8') as bf:
+                    json.dump(previous, bf, ensure_ascii=False, separators=(',', ':')); bf.flush(); os.fsync(bf.fileno())
+                os.replace(btmp, PORTFOLIO_BACKUP_FILE)
+    except Exception:
+        pass
     tmp = PORTFOLIO_FILE + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, separators=(',', ':'))
+        json.dump(data, f, ensure_ascii=False, separators=(',', ':')); f.flush(); os.fsync(f.fileno())
     os.replace(tmp, PORTFOLIO_FILE)
 
 def _portfolio_digest(rows):

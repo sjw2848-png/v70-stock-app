@@ -1,12 +1,9 @@
-# V78.7.0 시장분리·정확화·복합판 감사
+# V78.7.1 upgrade-safe portfolio audit
 
-- 한국/미국 시장 상태를 서버와 클라이언트 양쪽에서 동일한 세션 단계로 재구성.
-- KRX: 개장 전 → 시가 동시호가 → 정규장 → 시간외 대기 → 시간외 거래 → 장 마감.
-- 미국: 프리마켓 대기 → 프리마켓 → 정규장 → 애프터마켓 → 장 마감.
-- 즉시 매수 승격은 정규장(`open=true`)에서만 허용. 연장거래/동시호가는 관찰용으로만 표시.
-- 상단 YES/WAIT/NO 결론을 한국/미국 후보와 개장상태를 교차판정하도록 수정.
-- 한국장이 열려 있고 미국 후보만 있을 때 ‘전체 시장이 닫힘’처럼 보이던 문구 오류 수정.
-- 최종 행동판을 한국 개별주 / 한국 ETF / 미국 종목 / 진입임박으로 분리.
-- 상단 시장별 판정 그리드 추가: 시장 상태·현지시간·즉시후보/다음장후보 수를 독립 표시.
-- 기존 V78.6.3 보유종목 로컬 저장키는 그대로 유지해 업그레이드 시 자산 유실을 피함.
-- 설정은 V78.6.3/V78.6.2/V78.6.1에서 V78.7.0으로 자동 마이그레이션.
+- Portfolio browser key is now permanent (`v78-portfolio-account-v1`) and no longer changes with app versions.
+- Automatically migrates V78.6.0–V78.6.3 per-account browser keys into the permanent key.
+- Cloud refresh is non-destructive: server + device copies are merged before display/upload, so an empty/stale server cannot wipe a non-empty device portfolio during redeploy.
+- Browser keeps a previous portfolio backup before each overwrite.
+- Server keeps `portfolio.backup.json` before replacing `portfolio.json`; writes are atomic and fsynced.
+- Existing account separation and mobile/PC sync remain enabled.
+- IMPORTANT: Render still requires a persistent disk mounted at `/var/data` with `DATA_DIR=/var/data`; code cannot make an ephemeral filesystem persistent.

@@ -253,11 +253,12 @@ document.querySelectorAll('[data-trade]').forEach(btn=>btn.addEventListener('cli
 async function analyze(){saveSettings();const btn=$('analyzeBtn');btn.disabled=true;btn.textContent='분석 중…';showInitialLoading();$('status').textContent=allResults.length?'저장 결과를 보여주는 동안 최신 시장·종목을 갱신 중입니다.':'빠른 스마트 분석 중입니다. 처음에는 10~30초 정도 걸릴 수 있습니다.';try{const headers={'Content-Type':'application/json'},pin=$('appPin').value.trim();if(pin)headers['X-App-Pin']=pin;const res=await fetch('/api/analyze',{method:'POST',headers,body:JSON.stringify(settingsPayload())});const data=await res.json();if(!res.ok||!data.ok)throw new Error(data.error||'분석 실패');serverSessions=data.sessions||serverSessions;annotateRankChanges(data);updateRecommendationHistory(data);renderData(data);saveSnapshot(data);saveRankBaseline(data);$('status').textContent=`분석 완료 · 정상 ${data.summary.valid}/${data.summary.total}개 · 분석군 ${data.summary.universe_size??data.summary.total}개 · ${data.summary.elapsed_sec}초${data.cache_hit?' · 캐시 사용':''}`}catch(e){showInitialError(e.message);$('status').textContent=`최신 분석 오류: ${e.message}${allResults.length?' · 저장된 결과를 유지합니다.':''}`}finally{btn.disabled=false;btn.textContent='최신 분석'}}
 $('analyzeBtn').addEventListener('click',analyze);$('clearHistoryBtn').addEventListener('click',()=>{localStorage.removeItem(HISTORY_KEY);renderPerformance();renderFeedback();$('status').textContent='추천 사후 성적표 기록을 삭제했습니다.'});$('clearSavedBtn').addEventListener('click',()=>{localStorage.removeItem(SNAPSHOT_KEY);allResults=[];$('cards').innerHTML='';$('topPick').hidden=true;$('noBuyCard').hidden=true;$('status').textContent='저장 결과를 삭제했습니다.'});
 async function checkConnection(){try{const r=await fetch('/health',{cache:'no-store'}),d=await r.json();if(!r.ok||!d.ok)throw new Error();serverSessions=d.sessions||serverSessions;$('onlineState').textContent=`온라인 · ${d.version}`;$('onlineDot').classList.add('ok');$('connectionText').textContent=d.pin_required?'온라인 접속 · PIN 보호 사용 중':'온라인 접속 가능 · 홈 화면 추가 지원'}catch(e){$('onlineState').textContent='서버 연결 안 됨';$('onlineDot').classList.add('bad')}}
-$('shareBtn').addEventListener('click',async()=>{const d={title:'V78.7.0 개인계정 관리·장기모으기판',text:'최종 행동판 + 순위변화 + 추천 사후 성적표 + 위험기반 수량' ,url:location.href};try{if(navigator.share)await navigator.share(d);else{await navigator.clipboard.writeText(location.href);$('status').textContent='주소를 복사했습니다.'}}catch(e){}});window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('installBtn').classList.remove('hidden')});$('installBtn').addEventListener('click',async()=>{if(!installPrompt)return;installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;$('installBtn').classList.add('hidden')});document.querySelectorAll('.bottom-nav button').forEach(btn=>btn.addEventListener('click',()=>{if(btn.dataset.action==='held'){portfolioMode='held';renderPortfolio();if(accountConnected)portfolioCloudLoad(false,{force:true});$('portfolioCenter')?.scrollIntoView({behavior:'smooth',block:'start'});return}const el=$(btn.dataset.scroll);if(el)el.scrollIntoView({behavior:'smooth',block:'start'})}));
+$('shareBtn').addEventListener('click',async()=>{const d={title:'V78.7.1 개인계정 관리·장기모으기판',text:'최종 행동판 + 순위변화 + 추천 사후 성적표 + 위험기반 수량' ,url:location.href};try{if(navigator.share)await navigator.share(d);else{await navigator.clipboard.writeText(location.href);$('status').textContent='주소를 복사했습니다.'}}catch(e){}});window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('installBtn').classList.remove('hidden')});$('installBtn').addEventListener('click',async()=>{if(!installPrompt)return;installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;$('installBtn').classList.add('hidden')});document.querySelectorAll('.bottom-nav button').forEach(btn=>btn.addEventListener('click',()=>{if(btn.dataset.action==='held'){portfolioMode='held';renderPortfolio();if(accountConnected)portfolioCloudLoad(false,{force:true});$('portfolioCenter')?.scrollIntoView({behavior:'smooth',block:'start'});return}const el=$(btn.dataset.scroll);if(el)el.scrollIntoView({behavior:'smooth',block:'start'})}));
 loadSettings();updateMoneyNote();const restored=restoreSnapshot();checkConnection();setTimeout(()=>analyze(),restored?1200:450);if('serviceWorker'in navigator){navigator.serviceWorker.register('/static/sw.js').then(reg=>reg.update()).catch(()=>{});navigator.serviceWorker.addEventListener('controllerchange',()=>{if(!sessionStorage.getItem('v7863-reloaded')){sessionStorage.setItem('v7863-reloaded','1');location.reload()}})}
 
 // V78.3 — persistent holdings + watchlist center
-const PORTFOLIO_KEY_BASE='v78.6.3-portfolio';
+const PORTFOLIO_KEY_BASE='v78-portfolio-account-v1'; // stable across app upgrades: never version this key again
+const LEGACY_PORTFOLIO_BASES=['v78.6.3-portfolio','v78.6.2-portfolio','v78.6.1-portfolio','v78.6.0-portfolio','v78.5.0-portfolio','v78.4.3-portfolio','v78.4.2-portfolio','v78.4.1-portfolio','v78.4.0-portfolio','v78.3.0-portfolio'];
 const LEGACY_PORTFOLIO_KEYS=['v78.6.2-portfolio','v78.6.1-portfolio','v78.6.0-portfolio','v78.5.0-portfolio','v78.4.3-portfolio','v78.4.2-portfolio','v78.4.1-portfolio','v78.4.0-portfolio','v78.3.0-portfolio'];
 let portfolioRows=[];
 let portfolioSyncTimer=null;
@@ -287,6 +288,10 @@ function updateSyncDiagnostics(patch={}){
 }
 function portfolioLocalLoad(includeLegacy=false){
  let merged=loadJson(accountLocalKey(),[]); if(!Array.isArray(merged))merged=[];
+ const id=currentAccountId();
+ // Upgrade-safe migration: old releases stored account data under versioned keys.
+ // Read both old global keys and old per-account keys, then copy into one permanent key.
+ if(id){for(const base of LEGACY_PORTFOLIO_BASES){const rows=loadJson(`${base}:${id}`,[]);if(Array.isArray(rows)&&rows.length)merged=portfolioMerge(merged,rows)}}
  if(includeLegacy){for(const key of LEGACY_PORTFOLIO_KEYS){const rows=loadJson(key,[]);if(Array.isArray(rows))merged=portfolioMerge(merged,rows)}}
  if(merged.length)saveJson(accountLocalKey(),merged);
  return merged;
@@ -338,6 +343,10 @@ async function importLegacyData(){
  if(oldSync){try{const h=baseHeaders();h['X-Sync-Key']=oldSync;const r=await fetch('/api/portfolio/legacy',{headers:h,cache:'no-store'}),d=await r.json();if(r.ok&&d.ok&&Array.isArray(d.rows))merged=portfolioMerge(merged,d.rows)}catch(e){}}
  portfolioRows=merged;saveJson(accountLocalKey(),merged);setPending(true);renderPortfolio();const up=await portfolioCloudSave(true,merged);$('portfolioStatus').textContent=up.verified?`✅ 기존 자료 가져오기 완료 · 서버 ${merged.length}개 확인`:`📱 기존 자료 ${merged.length}개 보존 · 서버 업로드 재시도 필요`;
 }
+function portfolioBackupKey(){const id=currentAccountId();return id?`${PORTFOLIO_KEY_BASE}:backup:${id}`:`${PORTFOLIO_KEY_BASE}:backup:locked`}
+function savePortfolioLocalSafe(rows){
+ try{const key=accountLocalKey(),prev=localStorage.getItem(key);if(prev&&prev!=='[]')localStorage.setItem(portfolioBackupKey(),prev);localStorage.setItem(key,JSON.stringify(rows));return true}catch(e){return false}
+}
 async function portfolioCloudLoad(migrateLegacy=false,{force=false}={}){
  if(!accountConnected){renderPortfolio();$('portfolioStatus').textContent='🔒 자산 잠김 · 개인계정을 연결하세요.';updateSyncDiagnostics();return}
  const local=portfolioLocalLoad(migrateLegacy),pending=isPending();
@@ -345,14 +354,13 @@ async function portfolioCloudLoad(migrateLegacy=false,{force=false}={}){
  try{
   const r=await fetch('/api/portfolio',{headers:portfolioHeaders(),cache:'no-store',credentials:'same-origin'}),d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'동기화 실패');
   const server=Array.isArray(d.rows)?d.rows:[];
-  let next=server;
-  // Only merge/upload local data when this device explicitly has an unsynced change,
-  // or during migration when server is empty. Otherwise server is authoritative.
-  const shouldRecoverLocal=(pending&&local.length>0)||(migrateLegacy&&local.length>0)||(server.length===0&&local.length>0&&d.updated_at==null);
-  if(shouldRecoverLocal){next=portfolioMerge(server,local)}
-  portfolioRows=next;saveJson(accountLocalKey(),next);syncHeldSetting(next);renderPortfolio();
-  if(shouldRecoverLocal&&portfolioRowsSignature(server)!==portfolioRowsSignature(next)){
-    const up=await portfolioCloudSave(true,next);if(!up.verified)throw new Error(up.error||'기기 보존자료 서버 업로드 실패');
+  // V78.7.1 safety rule: a deploy, empty server response, or stale device must never erase a non-empty portfolio.
+  // Merge both copies first. Explicit deletion still goes through portfolioSave(), which writes the resulting list to both sides.
+  let next=portfolioMerge(server,local);
+  const differs=portfolioRowsSignature(server)!==portfolioRowsSignature(next);
+  portfolioRows=next;savePortfolioLocalSafe(next);syncHeldSetting(next);renderPortfolio();
+  if(differs){
+    setPending(true);const up=await portfolioCloudSave(true,next);if(!up.verified)throw new Error(up.error||'보존자료 서버 업로드 실패');
   }else{setPending(false)}
   const stamp=d.updated_at||new Date().toISOString();try{localStorage.setItem(lastSyncKey(),stamp)}catch(e){}
   updateSyncDiagnostics({serverCount:next.length,localCount:next.length,updatedAt:stamp,persistent:d.persistent,state:d.persistent===false?'warn':'ok'});
@@ -381,7 +389,7 @@ async function portfolioCloudSave(quiet=false,rowsSnapshot=null){
 async function portfolioSave(rows,{quiet=false}={}){
  const next=(Array.isArray(rows)?rows:[]).slice(0,100),key=accountLocalKey();portfolioRows=next;
  let localOk=false;
- try{localStorage.setItem(key,JSON.stringify(next));const check=JSON.parse(localStorage.getItem(key)||'[]');localOk=portfolioRowsSignature(check)===portfolioRowsSignature(next)}catch(e){localOk=false}
+ try{localOk=savePortfolioLocalSafe(next);const check=JSON.parse(localStorage.getItem(key)||'[]');localOk=localOk&&portfolioRowsSignature(check)===portfolioRowsSignature(next)}catch(e){localOk=false}
  if(localOk)setPending(true);syncHeldSetting(portfolioRows);renderPortfolio();clearTimeout(portfolioSyncTimer);updateSyncDiagnostics({localCount:next.length});
  if(!localOk){if(!quiet)$('portfolioStatus').textContent='❌ 기기 저장공간에 저장하지 못했습니다. 브라우저 저장공간/시크릿모드를 확인하세요.';return{local:false,cloud:false,verified:false}}
  if(!accountConnected){if(!quiet)$('portfolioStatus').textContent='📱 기기 임시저장 완료 · 서버 저장은 개인계정을 다시 연결하면 자동 동기화됩니다.';return{local:true,cloud:false,verified:false}}
