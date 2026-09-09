@@ -86,7 +86,7 @@ SECTOR_KEYWORDS = {
     '자동차/부품': ['자동차','완성차','차량','현대차','기아','현대모비스','현대글로비스','에코플라스틱'],
     '조선/해운': ['조선','해운','삼성중공업','한화오션','HD한국조선해양','HMM'],
     '방산/항공우주': ['방산','전차','미사일','항공우주','한화에어로스페이스','현대로템','한국항공우주'],
-    '전력/원전': ['원전','SMR','전력','변압기','전력기기','두산에너빌리티','HD현대일렉트릭','LS ELECTRIC','효성중공업'],
+    '전력/원전': ['원전','SMR','전력','변압기','전력기기','원자력','계측제어','원전제어','우리기술','두산에너빌리티','HD현대일렉트릭','LS ELECTRIC','효성중공업'],
     '바이오/제약': ['바이오','신약','FDA','임상','의약','알테오젠','HLB','셀트리온','삼성바이오로직스','LLY','MRK'],
     '의료기기/뷰티': ['의료기기','미용','뷰티','클래시스','파마리서치','휴젤','에이피알'],
     '금융/보험': ['금융','은행','보험','증권','KB금융','신한지주','하나금융','우리금융','삼성생명','삼성화재','JPM','BAC'],
@@ -115,7 +115,7 @@ KNOWN_THEME_TAGS = {
     '삼성전자':['메모리','HBM','AI 데이터센터'], 'SK하이닉스':['HBM','메모리','AI 데이터센터'], '한미반도체':['HBM','TC본더'],
     '기아':['완성차','EV','주주환원'], '현대차':['완성차','EV','하이브리드'], '현대모비스':['자동차부품','전동화'],
     '삼성중공업':['LNG선','조선수주'], '한화오션':['조선','방산'], '현대로템':['방산','철도'],
-    'HD현대일렉트릭':['변압기','전력기기','AI 데이터센터'], '두산에너빌리티':['원전','SMR','가스터빈'],
+    'HD현대일렉트릭':['변압기','전력기기','AI 데이터센터'], '두산에너빌리티':['원전','SMR','가스터빈'], '우리기술':['원전','SMR','계측제어'],
     '알테오젠':['바이오','기술이전'], '셀트리온':['바이오시밀러'], '삼성바이오로직스':['CDMO','바이오'],
     '아리바이오홀딩스':['바이오','AR1001','합병 이벤트'],
     'SK텔레콤':['통신','AI'], 'KT':['통신','IDC'], 'KT&G':['담배','배당'],
@@ -125,8 +125,14 @@ KNOWN_THEME_TAGS = {
 
 _KRX_CACHE = None
 _KRX_CODE_TO_NAME = None
+_KRX_META_BY_CODE = {}
 _KRX_CACHE_AT = 0.0
-KR_NAME_OVERRIDES = {'290690': '아리바이오홀딩스'}
+_KR_PROFILE_CACHE = {}
+_KR_PROFILE_CACHE_TTL = 12 * 3600
+KR_NAME_OVERRIDES = {'290690': '아리바이오홀딩스', '032820': '우리기술'}
+KR_META_OVERRIDES = {
+    '032820': {'name':'우리기술','market':'KOSDAQ','source_sector':'코스닥 전기·전자 / 원전 계측제어','theme':'원전/SMR/원자력 계측제어','instrument_type':'주식'},
+}
 
 
 def _safe_float(v, default=0.0):
@@ -583,16 +589,18 @@ def _normalize_kr_code(value):
 
 
 def get_krx_mapping(force=False):
-    """Current KRX name map with a short TTL so renamed stocks refresh automatically."""
-    global _KRX_CACHE, _KRX_CODE_TO_NAME, _KRX_CACHE_AT
+    """Current KRX name/code/meta cache. FDR is primary; overrides keep critical symbols usable during provider outages."""
+    global _KRX_CACHE, _KRX_CODE_TO_NAME, _KRX_META_BY_CODE, _KRX_CACHE_AT
     if (not force and _KRX_CACHE is not None and _KRX_CODE_TO_NAME is not None
             and time.time() - _KRX_CACHE_AT < 6 * 3600):
         return _KRX_CACHE
-    mapping, reverse = {}, {}
+    mapping, reverse, meta = {}, {}, {}
     try:
         df = fdr.StockListing('KRX')
         ccol = next((c for c in ['Code', 'Symbol', '단축코드'] if c in df.columns), df.columns[0])
         ncol = next((c for c in ['Name', '한글 종목약명', '종목명'] if c in df.columns), df.columns[1])
+        scol = next((c for c in ['Sector','Industry','업종','업종명'] if c in df.columns), None)
+        mcol = next((c for c in ['Market','시장구분','시장'] if c in df.columns), None)
         for _, r in df.iterrows():
             code = _normalize_kr_code(r[ccol])
             name = str(r[ncol]).strip()
@@ -600,17 +608,140 @@ def get_krx_mapping(force=False):
                 continue
             mapping[name] = code
             reverse[code] = name
+            sector = str(r[scol]).strip() if scol and pd.notna(r[scol]) else ''
+            market = str(r[mcol]).strip() if mcol and pd.notna(r[mcol]) else ''
+            meta[code] = {'name': name, 'source_sector': sector, 'market': market, 'source':'KRX/FDR'}
     except Exception:
         pass
 
-    # Officially verified recent renames / fallback for data-provider lag.
+    # Verified/manual fallbacks survive temporary KRX/FDR listing failures or delayed renames.
     for code, name in KR_NAME_OVERRIDES.items():
         mapping[name] = code
         reverse[code] = name
+        base = dict(KR_META_OVERRIDES.get(code) or {})
+        base.setdefault('name', name); base.setdefault('source','verified fallback')
+        meta[code] = {**meta.get(code, {}), **base}
 
-    _KRX_CACHE, _KRX_CODE_TO_NAME, _KRX_CACHE_AT = mapping, reverse, time.time()
+    _KRX_CACHE, _KRX_CODE_TO_NAME, _KRX_META_BY_CODE, _KRX_CACHE_AT = mapping, reverse, meta, time.time()
     return _KRX_CACHE
 
+
+def get_krx_meta(code):
+    get_krx_mapping()
+    code = _normalize_kr_code(code)
+    return dict((_KRX_META_BY_CODE or {}).get(code) or KR_META_OVERRIDES.get(code) or {})
+
+
+def _deep_find_first(obj, keys):
+    wanted={str(k).lower() for k in keys}
+    if isinstance(obj, dict):
+        for k,v in obj.items():
+            if str(k).lower() in wanted and isinstance(v,(str,int,float)) and str(v).strip():
+                return str(v).strip()
+        for v in obj.values():
+            got=_deep_find_first(v, keys)
+            if got: return got
+    elif isinstance(obj, list):
+        for v in obj:
+            got=_deep_find_first(v, keys)
+            if got: return got
+    return ''
+
+
+def _naver_kr_search(query, limit=12):
+    """Best-effort Korean symbol autocomplete independent of the FDR listing master."""
+    q=str(query or '').strip()
+    if not q: return []
+    out=[]; seen=set()
+    try:
+        r=requests.get('https://m.stock.naver.com/front-api/search/autoComplete', params={
+            'query':q, 'target':'stock,index,marketindicator,coin,ipo'
+        }, headers={'User-Agent':'Mozilla/5.0','Referer':'https://m.stock.naver.com/'}, timeout=2.2)
+        r.raise_for_status(); data=r.json() or {}
+        items=((data.get('result') or {}).get('items') if isinstance(data.get('result'),dict) else None) or data.get('items') or []
+        for z in items:
+            if not isinstance(z,dict): continue
+            code=_normalize_kr_code(z.get('code') or z.get('symbolCode') or z.get('ticker') or '')
+            name=str(z.get('name') or z.get('stockName') or '').strip()
+            if not (code.isdigit() and len(code)==6 and name): continue
+            tname=str(z.get('typeName') or z.get('marketName') or z.get('market') or '').strip()
+            sec_type=str(z.get('type') or z.get('securityType') or '').strip()
+            kind='ETF' if ('ETF' in sec_type.upper() or 'ETF' in tname.upper()) else '주식'
+            key=(code,name)
+            if key in seen: continue
+            seen.add(key); out.append({'code':code,'name':name,'market':'KR','type':kind,'exchange':tname or 'KRX','source':'Naver autocomplete'})
+            if len(out)>=limit: break
+    except Exception:
+        pass
+    if out: return out
+    # Legacy autocomplete endpoint is a second independent fallback.
+    try:
+        r=requests.get('https://ac.finance.naver.com/ac', params={'q':q,'q_enc':'UTF-8','st':'111','sug':'all','frm':'stock'},
+                       headers={'User-Agent':'Mozilla/5.0'}, timeout=2.2)
+        r.raise_for_status(); data=r.json() or {}; groups=data.get('items') or []
+        raw=groups[0] if groups and isinstance(groups[0],list) else []
+        for item in raw:
+            if not isinstance(item,list) or len(item)<2: continue
+            name=str(item[0]).strip(); code=_normalize_kr_code(item[1])
+            if code.isdigit() and len(code)==6 and name:
+                out.append({'code':code,'name':name,'market':'KR','type':'주식','exchange':'KRX','source':'Naver legacy autocomplete'})
+            if len(out)>=limit: break
+    except Exception:
+        pass
+    return out
+
+
+def get_kr_stock_profile(code, allow_network=True):
+    """Return best-effort Korean name/market/source-sector metadata; never invent a sector."""
+    code=_normalize_kr_code(code)
+    base=get_krx_meta(code)
+    if code in KR_META_OVERRIDES:
+        base={**base, **KR_META_OVERRIDES[code]}
+    cached=_KR_PROFILE_CACHE.get(code)
+    if cached and time.time()-cached[0] < _KR_PROFILE_CACHE_TTL:
+        return {**base, **cached[1]}
+    if not allow_network:
+        return base
+    prof={}
+    try:
+        r=requests.get(f'https://m.stock.naver.com/api/stock/{code}/integration',
+                       headers={'User-Agent':'Mozilla/5.0','Referer':f'https://m.stock.naver.com/domestic/stock/{code}/total'}, timeout=2.5)
+        r.raise_for_status(); data=r.json() or {}
+        name=str(data.get('stockName') or data.get('name') or '').strip()
+        industry=_deep_find_first(data,['industryName','industry','sectorName','sector'])
+        market=_deep_find_first(data,['marketName','marketType','market'])
+        if name: prof['name']=name
+        if industry and industry not in ('KOSPI','KOSDAQ','KRX'): prof['source_sector']=industry
+        if market: prof['market']=market
+        if prof: prof['source']='Naver stock profile'
+    except Exception:
+        pass
+    # Basic endpoint is lighter and reliably carries stockName + exchange even if integration is partially unavailable.
+    if not prof.get('name') or not prof.get('market'):
+        try:
+            r=requests.get(f'https://m.stock.naver.com/api/stock/{code}/basic',headers={'User-Agent':'Mozilla/5.0'},timeout=2.0)
+            r.raise_for_status(); data=r.json() or {}
+            if data.get('stockName'): prof['name']=str(data.get('stockName')).strip()
+            ex=data.get('stockExchangeType') or {}
+            if isinstance(ex,dict) and ex.get('name'): prof['market']=str(ex.get('name')).strip()
+            if prof: prof.setdefault('source','Naver stock profile')
+        except Exception:
+            pass
+    if code in KR_META_OVERRIDES:
+        prof={**prof, **KR_META_OVERRIDES[code]}
+    _KR_PROFILE_CACHE[code]=(time.time(),prof)
+    return {**base, **prof}
+
+
+def enrich_kr_info(code, info=None, allow_network=True):
+    info=dict(info or {})
+    prof=get_kr_stock_profile(code, allow_network=allow_network)
+    if prof.get('name'): info['name']=prof['name']
+    if prof.get('source_sector'): info['source_sector']=prof['source_sector']
+    if prof.get('theme') and (not info.get('theme') or info.get('theme') in ('직접 검색 종목','보유/검색 종목')):
+        info['theme']=prof['theme']
+    info['meta_source']=prof.get('source') or info.get('meta_source','')
+    return info
 
 def get_current_kr_name(code, fallback=''):
     get_krx_mapping()
@@ -1560,6 +1691,7 @@ def analyze_one(code, info, market, settings, fx, market_state):
     try:
         info = dict(info or {})
         if market in ('KR', 'ETF'):
+            info = enrich_kr_info(code, info, allow_network=True)
             info['name'] = get_current_kr_name(code, info.get('name', code))
         df = _load_price(code, market)
         if df is None or df.empty:
@@ -1771,6 +1903,8 @@ def analyze_one(code, info, market, settings, fx, market_state):
             'market': market,
             'category': 'US' if market == 'US' else ('ETF' if market == 'ETF' else 'KR'),
             'theme': info.get('theme', ''),
+            'source_sector': info.get('source_sector', ''),
+            'meta_source': info.get('meta_source', ''),
             'sector': sector,
             'sector_major': taxonomy['major'],
             'theme_tags': taxonomy['theme_tags'],
@@ -1886,7 +2020,7 @@ def parse_held(text: str):
         parts = [x.strip() for x in item.split(':')]
         key = parts[0] if parts else ''
         price = _safe_float(parts[1].replace(',', '').replace('원', ''), 0) if len(parts) > 1 else 0
-        qty = int(max(_safe_float(parts[2].replace('주',''), 0), 0)) if len(parts) > 2 else 0
+        qty = max(_safe_float(parts[2].replace('주',''), 0), 0) if len(parts) > 2 else 0
         if not key:
             continue
         # Alphabetic ticker => US holding.
@@ -1903,7 +2037,8 @@ def parse_held(text: str):
             code, name = mapping[key], key
         if code:
             info = dict(KR_CURATED.get(code) or KR_ETFS.get(code) or {'name':name, 'theme':'보유/검색 종목', 'target_pct':4.0, 'tech':'추세매매'})
-            info.update({'name': info.get('name') or name, 'theme':'보유/검색 종목', 'my_price':price, 'held_qty':qty})
+            info.update({'name': info.get('name') or name, 'theme': info.get('theme') or '보유/검색 종목', 'my_price':price, 'held_qty':qty})
+            info = enrich_kr_info(code, info, allow_network=False)
             market = 'ETF' if code in get_kr_etf_mapping() else 'KR'
             result.append((code, info, market))
     return result
@@ -2086,18 +2221,18 @@ def _resolve_search_query(query: str, market_hint: str = 'AUTO'):
         '오라클':'ORCL', 'ORACLE':'ORCL',
     }
     if q in ('소룩스', 'SOLUX') and hint != 'US':
-        return '290690', dict(KR_CURATED['290690']), 'KR'
+        return '290690', enrich_kr_info('290690', dict(KR_CURATED['290690']), allow_network=False), 'KR'
 
     alias_code = us_aliases.get(q) or us_aliases.get(qu)
-    if alias_code:
+    if alias_code and hint not in {'KR','ETF'}:
         info = dict(US_CURATED.get(alias_code) or {'name': q, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'tech': '추세매매'})
         return alias_code, info, 'US'
 
-    # Known curated Korean/US names first.
-    for code, info in {**KR_CURATED, **KR_ETFS}.items():
-        if q == info.get('name') or qu == code.upper():
+    # Known curated Korean/ETF symbols first.
+    for code, info0 in {**KR_CURATED, **KR_ETFS}.items():
+        if q == info0.get('name') or qu == code.upper():
             market = 'ETF' if code in get_kr_etf_mapping() else 'KR'
-            return code, dict(info), market
+            return code, enrich_kr_info(code, dict(info0), allow_network=False), market
     for code, info in US_CURATED.items():
         if q.lower() == str(info.get('name', '')).lower() or qu == code.upper():
             return code, dict(info), 'US'
@@ -2117,34 +2252,48 @@ def _resolve_search_query(query: str, market_hint: str = 'AUTO'):
     mapping = get_krx_mapping()
     if q.isdigit():
         code = q.zfill(6)
-        name = next((n for n, c in mapping.items() if c == code), code)
+        name = get_current_kr_name(code, code)
         market = 'ETF' if code in get_kr_etf_mapping() else 'KR'
         info = dict(KR_ETFS.get(code) or KR_CURATED.get(code) or {'name': name, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'tech': '추세매매'})
-        info['name'] = info.get('name') or name
-        return code, info, market
+        return code, enrich_kr_info(code, info, allow_network=True), market
 
     if q in mapping:
         code = mapping[q]
         market = 'ETF' if code in get_kr_etf_mapping() else 'KR'
         info = dict(KR_ETFS.get(code) or KR_CURATED.get(code) or {'name': q, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'tech': '추세매매'})
-        return code, info, market
+        return code, enrich_kr_info(code, info, allow_network=True), market
 
-    # Korean partial-name match: prefer startswith, then shortest matching name.
+    # Korean partial-name match from the cached KRX master.
     matches = [(name, code) for name, code in mapping.items() if q.lower() in name.lower()]
     if matches and hint != 'US':
         matches.sort(key=lambda x: (0 if x[0].lower().startswith(q.lower()) else 1, len(x[0]), x[0]))
         name, code = matches[0]
         market = 'ETF' if code in get_kr_etf_mapping() else 'KR'
         info = dict(KR_ETFS.get(code) or KR_CURATED.get(code) or {'name': name, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'tech': '추세매매'})
-        return code, info, market
+        return code, enrich_kr_info(code, info, allow_network=True), market
 
-    # AUTO fallback: alphabetic ticker -> US.
+    # Independent Korean online autocomplete fallback. This is critical when the FDR/KRX master fails on a cloud host.
+    if hint != 'US':
+        naver = _naver_kr_search(q, 10)
+        if naver:
+            qn=_search_norm(q)
+            naver.sort(key=lambda z:(0 if _search_norm(z.get('name'))==qn or _search_norm(z.get('code'))==qn else 1,
+                                     0 if _search_norm(z.get('name','')).startswith(qn) else 1,
+                                     len(str(z.get('name','')))))
+            z=naver[0]; code=_normalize_kr_code(z.get('code')); name=str(z.get('name') or code)
+            is_etf=str(z.get('type','')).upper()=='ETF' or code in get_kr_etf_mapping()
+            market='ETF' if is_etf else 'KR'
+            info=dict(KR_ETFS.get(code) or KR_CURATED.get(code) or {'name':name,'theme':'직접 검색 종목','target_pct':4.0,'tech':'추세매매'})
+            info=enrich_kr_info(code, info, allow_network=True)
+            info.setdefault('search_source', z.get('source','Naver autocomplete'))
+            return code, info, market
+
+    # AUTO fallback: alphabetic ticker -> US only after Korean providers were tried.
     if all(ch.isalnum() or ch in '.-' for ch in qu) and any(ch.isalpha() for ch in qu):
         code = qu.replace(' ', '')
         return code, {'name': code, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'tech': '추세매매'}, 'US'
 
     raise ValueError(f'종목을 찾지 못했습니다: {q}')
-
 
 
 _SYMBOL_SEARCH_CACHE = {}
@@ -2181,26 +2330,27 @@ def _yahoo_symbol_search(q, limit=12):
         return []
 
 def search_instruments(query: str, market_hint: str = 'AUTO', limit: int = 12):
-    """Fast selectable KR/US stock+ETF search with aliases, fuzzy-ish normalization and TTL cache."""
+    """Multi-source selectable KR/US stock+ETF search with KRX cache + Naver + Yahoo fallbacks."""
     q=str(query or '').strip(); hint=str(market_hint or 'AUTO').upper(); limit=max(1,min(int(limit or 12),20))
     if not q: return []
     qn=_search_norm(q); cache_key=(qn,hint,limit); now=time.time()
     cached=_SYMBOL_SEARCH_CACHE.get(cache_key)
     if cached and now-cached[0] < _SYMBOL_SEARCH_CACHE_TTL: return [dict(x) for x in cached[1]]
     out=[]; seen=set()
-    def add(code,name,market,kind='주식',exchange='',score=50):
+    def add(code,name,market,kind='주식',exchange='',score=50,source='',sector='',major='',source_sector=''):
         code=str(code or '').strip(); name=str(name or '').strip(); key=(market,code.upper())
         if key in seen or not code or not name: return
-        seen.add(key); out.append({'code':code,'name':name,'market':market,'type':kind,'exchange':str(exchange or ''),'_score':score})
+        seen.add(key); out.append({'code':code,'name':name,'market':market,'type':kind,'exchange':str(exchange or ''),
+                                  'source':str(source or ''),'sector':str(sector or ''),'sector_major':str(major or ''),'source_sector':str(source_sector or ''),'_score':score})
 
     # Alias hit is immediate and also used to search Yahoo by canonical ticker.
     alias=_US_SEARCH_ALIASES.get(qn)
     if alias and hint not in {'KR','ETF'}:
         known=US_CURATED.get(alias,{})
         fallback_names={'PG':'Procter & Gamble','KO':'Coca-Cola','AMZN':'Amazon','GOOGL':'Alphabet','META':'Meta Platforms'}
-        add(alias,known.get('name') or fallback_names.get(alias) or alias,'US','주식','US',0)
+        add(alias,known.get('name') or fallback_names.get(alias) or alias,'US','주식','US',0,'alias')
 
-    # Local cached KRX master: no network call after warm-up. Curated data gives instant first-response fallbacks.
+    # KRX/FDR cached master. Metadata includes source industry when the provider supplies it.
     if hint != 'US':
         local={}
         for code,info in {**KR_CURATED,**KR_ETFS}.items(): local[str(info.get('name',code))]=str(code)
@@ -2210,10 +2360,37 @@ def search_instruments(query: str, market_hint: str = 'AUTO', limit: int = 12):
         for name,code in local.items():
             nn=_search_norm(name); cc=str(code)
             if qn in nn or qn in _search_norm(cc):
-                score=0 if nn==qn or cc==q else 5 if nn.startswith(qn) else 15
+                score=0 if nn==qn or _search_norm(cc)==qn else 5 if nn.startswith(qn) else 15
                 scored.append((score,len(nn),name,cc))
         etfs=get_kr_etf_mapping()
-        for score,_,name,code in sorted(scored)[:limit*3]: add(code,name,'KR','ETF' if code in etfs else '주식','KRX',score)
+        for score,_,name,code in sorted(scored)[:limit*3]:
+            meta=get_krx_meta(code); info=enrich_kr_info(code, {'name':name,'theme':meta.get('theme','')}, allow_network=False)
+            tax=classify_theme_detail(info.get('name',name),info.get('theme',''),info.get('source_sector',''))
+            ex=meta.get('market') or 'KRX'; kind='ETF' if code in etfs else '주식'
+            if hint=='ETF' and kind!='ETF': continue
+            if hint=='KR' and kind=='ETF': continue
+            add(code,info.get('name') or name,'KR',kind,ex,score,meta.get('source','KRX/FDR'),tax['industry'],tax['major'],info.get('source_sector',''))
+
+        # Independent Naver autocomplete: fixes cloud cases where the FDR listing master is empty/stale.
+        try:
+            naver=_naver_kr_search(q, max(limit,12))
+        except Exception:
+            naver=[]
+        for z in naver:
+            code=_normalize_kr_code(z.get('code')); name=str(z.get('name') or code)
+            nn=_search_norm(name); cc=_search_norm(code)
+            if not (qn in nn or qn in cc or nn in qn): continue
+            meta=get_krx_meta(code)
+            # Network profile only for an exact/top match; avoids one network request per suggestion.
+            exact=(nn==qn or cc==qn)
+            if exact: meta={**meta, **get_kr_stock_profile(code, allow_network=True)}
+            info={'name':meta.get('name') or name,'theme':meta.get('theme',''),'source_sector':meta.get('source_sector','')}
+            tax=classify_theme_detail(info['name'],info['theme'],info['source_sector'])
+            kind=z.get('type') or ('ETF' if code in etfs else '주식')
+            if hint=='ETF' and kind!='ETF': continue
+            if hint=='KR' and kind=='ETF': continue
+            score=1 if exact else 6 if nn.startswith(qn) else 14
+            add(code,info['name'],'KR',kind,z.get('exchange') or meta.get('market') or 'KRX',score,z.get('source') or 'Naver autocomplete',tax['industry'],tax['major'],info.get('source_sector',''))
 
     # US: use canonical ticker for Korean aliases, otherwise original text. Yahoo supports company-name partials.
     if hint not in {'KR','ETF'}:
@@ -2223,26 +2400,27 @@ def search_instruments(query: str, market_hint: str = 'AUTO', limit: int = 12):
             if qt not in {'EQUITY','ETF'}: continue
             sym=str(z.get('symbol') or '').upper(); name=z.get('shortname') or z.get('longname') or sym
             exch=z.get('exchange') or z.get('exchDisp') or ''
-            # Avoid non-US listings when AUTO/US was requested, while allowing common US exchanges.
             exch_u=str(exch).upper()
             if hint=='US' and exch_u and not any(x in exch_u for x in ('NMS','NYQ','NGM','NCM','NASDAQ','NYSE','ASE','PCX','BATS','ARCA')): continue
             nn=_search_norm(name); sn=_search_norm(sym)
             score=1 if alias and sym==alias else 2 if sn==qn else 8 if nn.startswith(qn) else 18
-            add(sym,name,'US','ETF' if qt=='ETF' else '주식',exch,score)
+            info=US_CURATED.get(sym) or {'name':name,'theme':'직접 검색 종목'}
+            tax=classify_theme_detail(info.get('name',name),info.get('theme',''),'')
+            add(sym,name,'US','ETF' if qt=='ETF' else '주식',exch,score,'Yahoo autocomplete',tax['industry'],tax['major'])
 
-        # Curated fallback + ticker direct candidate: search should never say 'no match' for a valid-looking ticker.
         for code,info in US_CURATED.items():
             name=str(info.get('name',code)); nn=_search_norm(name)
-            if qn in nn or qn in _search_norm(code): add(code,name,'US','주식','US',10)
+            if qn in nn or qn in _search_norm(code):
+                tax=classify_theme_detail(name,info.get('theme',''),'')
+                add(code,name,'US','주식','US',10,'curated fallback',tax['industry'],tax['major'])
         qu=q.upper().replace(' ','')
-        if re.fullmatch(r'[A-Z][A-Z0-9.\-]{0,9}',qu): add(qu,US_CURATED.get(qu,{}).get('name') or qu,'US','주식','직접 티커',30)
+        if re.fullmatch(r'[A-Z][A-Z0-9.\-]{0,9}',qu): add(qu,US_CURATED.get(qu,{}).get('name') or qu,'US','주식','직접 티커',30,'ticker fallback')
 
     out.sort(key=lambda x:(x['_score'], len(x['name']), x['name']))
     result=[]
     for x in out[:limit]:
         y=dict(x); y.pop('_score',None); result.append(y)
     _SYMBOL_SEARCH_CACHE[cache_key]=(now,result)
-    # bounded cache
     if len(_SYMBOL_SEARCH_CACHE)>300:
         for k in list(_SYMBOL_SEARCH_CACHE)[:100]: _SYMBOL_SEARCH_CACHE.pop(k,None)
     return result

@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, render_template, request, g
 from engine import analyze, analyze_search, search_instruments, fetch_fundamentals, fetch_recent_issues
 
-APP_VERSION = 'V78.7.1'
+APP_VERSION = 'V78.7.2'
 app = Flask(__name__)
 
 _cache_lock = threading.Lock()
@@ -607,6 +607,10 @@ def api_portfolio_put():
                       'avg':avg if typ=='held' else 0,'qty':qty if typ=='held' else 0,
                       'name':str(row.get('name','')).strip()[:120], 'code':str(row.get('code','')).strip()[:24],
                       'instrument_type':str(row.get('instrument_type','')).strip()[:20], 'exchange':str(row.get('exchange','')).strip()[:30],
+                      'sector':str(row.get('sector','')).strip()[:80], 'sector_major':str(row.get('sector_major','')).strip()[:80],
+                      'source_sector':str(row.get('source_sector','')).strip()[:120],
+                      'theme_tags':[str(x).strip()[:40] for x in (row.get('theme_tags') or [])[:6] if str(x).strip()],
+                      'sector_updated_at':str(row.get('sector_updated_at','')).strip()[:40],
                       'accumulate':bool(row.get('accumulate',False)) if typ=='held' else False,
                       'daily_amount':daily if typ=='held' else 0,
                       'accum_start':str(row.get('accum_start','')).strip()[:10] if typ=='held' else '',
