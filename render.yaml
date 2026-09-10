@@ -17,8 +17,18 @@ services:
       - key: APP_PIN
         sync: false
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: v78-stock-db
+          property: connectionString
 
-# V78.8.1 persistence: Free Render web services cannot use persistent disks.
-# Set DATABASE_URL to a persistent PostgreSQL database for durable accounts/portfolios.
-# On a paid Render web service you can alternatively attach a disk at /var/data.
+databases:
+  - name: v78-stock-db
+    plan: free
+    databaseName: v78_stock
+    user: v78_stock_user
+
+# V78.8.2
+# Blueprint deployment automatically injects the PostgreSQL internal connection string.
+# To reuse an existing lottery PostgreSQL instead, remove the databases/fromDatabase mapping
+# and set the Stock Web Service DATABASE_URL once to that database's Internal URL.
+# Stock data is isolated in stock_app_state / stock_app_storage_probe tables.

@@ -27,7 +27,7 @@ class StateStore:
 
     def _connect(self):
         import psycopg
-        return psycopg.connect(self.database_url, connect_timeout=6)
+        return psycopg.connect(self.database_url, connect_timeout=6, application_name='v78-stock-app')
 
     def _ensure_db(self):
         if not self.database_url or self._db_ready:
@@ -152,6 +152,44 @@ class StateStore:
             raise OSError(f"PostgreSQL 저장 실패: {str(db_error)[:160]}")
         if not self.database_url and file_error is not None:
             raise OSError(f"파일 저장 실패: {str(file_error)[:160]}")
+
+
+    def probe_database(self):
+        """Perform a real round-trip write/read test without touching user portfolio data."""
+        if not self.database_url:
+            return {"ok": False, "reason": "not_configured"}
+        token = self._now()
+        try:
+            self._ensure_db()
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS stock_app_storage_probe (
+                            probe_key TEXT PRIMARY KEY,
+                            probe_value TEXT NOT NULL,
+                            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """INSERT INTO stock_app_storage_probe(probe_key, probe_value, updated_at)
+                           VALUES ('primary', %s, NOW())
+                           ON CONFLICT(probe_key) DO UPDATE
+                           SET probe_value=EXCLUDED.probe_value, updated_at=NOW()""",
+                        (token,),
+                    )
+                    cur.execute("SELECT probe_value, updated_at FROM stock_app_storage_probe WHERE probe_key='primary'")
+                    row = cur.fetchone()
+                conn.commit()
+            ok = bool(row and str(row[0]) == token)
+            if ok:
+                self.last_error = ""
+            return {"ok": ok, "written": token, "read_back": str(row[0]) if row else None,
+                    "checked_at": self._now()}
+        except Exception as exc:
+            self.last_error = str(exc)[:220]
+            return {"ok": False, "error": self.last_error, "checked_at": self._now()}
 
     def status(self):
         mounted = False

@@ -13,7 +13,7 @@ from flask import Flask, jsonify, render_template, request, g
 from state_store import StateStore
 from engine import analyze, analyze_search, search_instruments, fetch_fundamentals, fetch_recent_issues
 
-APP_VERSION = 'V78.8.1'
+APP_VERSION = 'V78.8.2'
 app = Flask(__name__)
 
 _cache_lock = threading.Lock()
@@ -32,7 +32,15 @@ PORTFOLIO_FILE = os.path.join(DATA_DIR, 'portfolio.json')
 PORTFOLIO_BACKUP_FILE = os.path.join(DATA_DIR, 'portfolio.backup.json')
 ACCOUNTS_FILE = os.path.join(DATA_DIR, 'accounts.json')
 ACCOUNTS_BACKUP_FILE = os.path.join(DATA_DIR, 'accounts.backup.json')
-DATABASE_URL = os.environ.get('DATABASE_URL', '').strip()
+# V78.8.2: database-first persistence. DATABASE_URL is the standard Render variable.
+# STOCK_DATABASE_URL / LOTTO_DATABASE_URL are accepted as explicit aliases so the stock
+# service can reuse an already-managed PostgreSQL instance without changing application code.
+_DATABASE_CANDIDATES = [
+    ('DATABASE_URL', os.environ.get('DATABASE_URL', '')),
+    ('STOCK_DATABASE_URL', os.environ.get('STOCK_DATABASE_URL', '')),
+    ('LOTTO_DATABASE_URL', os.environ.get('LOTTO_DATABASE_URL', '')),
+]
+DATABASE_SOURCE, DATABASE_URL = next(((k, str(v or '').strip()) for k, v in _DATABASE_CANDIDATES if str(v or '').strip()), ('', ''))
 _state_store = StateStore(DATA_DIR, DATABASE_URL)
 _portfolio_lock = threading.Lock()
 _account_lock = threading.Lock()
@@ -92,7 +100,7 @@ def _normalize_account_id(value):
     return ''.join(ch for ch in raw if ch.isalnum() or ch in {'-','_','.'})[:40]
 
 def _read_accounts():
-    # V78.8.1: account registry and portfolio now share the same persistence abstraction.
+    # V78.8.2: account registry and portfolio now share the same persistence abstraction.
     # The old code accidentally used portfolio.backup.json as an account fallback, which could
     # make a valid ID appear to be missing after a damaged/missing accounts.json.
     return _state_store.read('accounts', ACCOUNTS_FILE, ACCOUNTS_BACKUP_FILE)
@@ -172,6 +180,8 @@ def _storage_status():
     # name alone is not proof, so report it as host-filesystem unless PostgreSQL is configured.
     st['configured_data_dir'] = os.path.abspath(DATA_DIR)
     st['render_free_disk_warning'] = (not DATABASE_URL and os.environ.get('RENDER','').lower() in {'1','true','yes'})
+    st['database_source'] = DATABASE_SOURCE or None
+    st['database_namespace'] = 'stock_app_state'
     return st
 
 def _portfolio_digest(rows):
@@ -513,6 +523,15 @@ def api_storage_status():
     if not _authorized():
         return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.'}), 401
     return jsonify({'ok': True, 'version': APP_VERSION, 'storage': _storage_status()})
+
+
+@app.post('/api/storage/verify')
+def api_storage_verify():
+    if not _authorized():
+        return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.'}), 401
+    probe = _state_store.probe_database()
+    storage = _storage_status()
+    return jsonify({'ok': bool(probe.get('ok')), 'version': APP_VERSION, 'probe': probe, 'storage': storage}), (200 if probe.get('ok') else 503)
 
 
 @app.post('/api/account/change-id')
