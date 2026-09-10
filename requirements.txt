@@ -7,3 +7,5 @@ finance-datareader>=0.9.96
 lxml>=5.0
 html5lib>=1.1
 gunicorn>=22,<24
+
+psycopg[binary]>=3.2,<4

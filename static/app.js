@@ -4,6 +4,7 @@ const HISTORY_KEY='v78.3.0-recommendation-history', RANK_KEY='v78.3.0-rank-basel
 const LEGACY_SNAPSHOT_KEYS=['v70.13.1-last-snapshot','v70.13-last-snapshot','v70.12-last-snapshot','v70.11-last-snapshot','v70.10-last-snapshot','v70.9-last-snapshot'];
 const fields=['budget','tradeBudget','longBudget','savingGoal','monthlySaving','currentSaving','riskPct','stopPct','minRrr','trustMode','mode','topN','held','appPin','accountId'];
 const ACCOUNT_SECRET_KEY='v78-account-secret';
+const ACCOUNT_ID_KEY='v78-account-id-v1';
 let allResults=[],activeFilter='ALL',installPrompt=null,showAll=false,currentSector='ALL',serverSessions=null;
 
 const KR_HOLIDAYS_2026=new Set(['2026-01-01','2026-02-16','2026-02-17','2026-02-18','2026-03-02','2026-05-05','2026-05-25','2026-06-03','2026-08-17','2026-09-24','2026-09-25','2026-10-05','2026-10-09','2026-12-25']);
@@ -79,9 +80,9 @@ function feedbackStats(rows){
  return{n:done.length,win:wins/done.length*100,avg,brier,byTech:group('tech'),byRegime:group('market_regime'),byLane:group('lane')};
 }
 function renderFeedback(){const box=$('feedbackEngine'),history=loadJson(HISTORY_KEY,[]),st=feedbackStats(history);if(!box)return;if(!st){box.innerHTML='<div class="quality-empty">D+5 완료 기록이 쌓이면 전략·시장국면별 자동 피드백을 표시합니다.</div>';return}const fmtGroup=(title,arr)=>`<div class="feedback-group"><b>${title}</b>${arr.slice(0,5).map(x=>`<span>${escapeText(x.k)} · ${x.n}건 · 승 ${x.win.toFixed(0)}% · 평균 ${perfCell(x.avg)}</span>`).join('')}</div>`;let calibration=st.brier<=.20?'양호':st.brier<=.25?'보통':'주의';const done=history.filter(r=>r.d5_return!==null&&r.d5_return!==undefined),recent=done.slice(0,20),base=done.slice(20);let drift='표본부족',driftClass='';if(recent.length>=10&&base.length>=10){const rw=recent.filter(r=>Number(r.d5_return)>0).length/recent.length*100,bw=base.filter(r=>Number(r.d5_return)>0).length/base.length*100,delta=rw-bw;drift=delta<=-15?'위험':delta<=-8?'주의':'정상';driftClass=` · 최근-기준 ${delta>=0?'+':''}${delta.toFixed(0)}%p`;}box.innerHTML=`<div class="feedback-kpis"><span>모델 드리프트<b>${drift}${driftClass}</b></span><span>D+5 표본<b>${st.n}건</b></span><span>실현 플러스 비율<b>${st.win.toFixed(0)}%</b></span><span>평균수익<b>${perfCell(st.avg)}</b></span><span>확률오차(Brier)<b>${st.brier.toFixed(3)} · ${calibration}</b></span></div>${fmtGroup('전략별',st.byTech)}${fmtGroup('시장국면별',st.byRegime)}${fmtGroup('추천유형별',st.byLane)}<p class="quality-note">Brier는 0에 가까울수록 저장 당시 추정확률과 실제 D+5 방향이 잘 맞았다는 뜻입니다. 표본 20건 미만은 결론보다 관찰용으로 보세요.</p>`}
-function saveSettings(){const d={};fields.forEach(k=>d[k]=$(k).value);localStorage.setItem(SETTINGS_KEY,JSON.stringify(d))}
+function saveSettings(){const d={};fields.forEach(k=>d[k]=$(k).value);localStorage.setItem(SETTINGS_KEY,JSON.stringify(d));try{const id=String($('accountId')?.value||'').trim().toLowerCase();if(id)localStorage.setItem(ACCOUNT_ID_KEY,id)}catch(e){}}
 function saveAccountSecret(){try{sessionStorage.setItem(ACCOUNT_SECRET_KEY,String($('accountPassword')?.value||''))}catch(e){}}
-function loadSettings(){try{let raw=localStorage.getItem(SETTINGS_KEY);if(!raw){raw=localStorage.getItem('v78.6.3-settings')||localStorage.getItem('v78.6.2-settings')||localStorage.getItem('v78.6.1-settings')||localStorage.getItem('v78.6.0-settings')||localStorage.getItem('v78.3.0-settings')||localStorage.getItem('v78.1.0-settings')||localStorage.getItem('v70.14.2-settings')||localStorage.getItem('v70.14.1-settings');if(raw){const old=JSON.parse(raw||'{}');delete old.accountPassword;localStorage.setItem(SETTINGS_KEY,JSON.stringify(old));raw=JSON.stringify(old)}}const d=JSON.parse(raw||'{}');fields.forEach(k=>{if(d[k]!==undefined)$(k).value=d[k]});const pw=sessionStorage.getItem(ACCOUNT_SECRET_KEY)||'';if($('accountPassword'))$('accountPassword').value=pw;for(const k of ['v78.6.3-settings','v78.6.2-settings','v78.6.1-settings','v78.6.0-settings','v78.5.0-settings']){try{const od=JSON.parse(localStorage.getItem(k)||'null');if(od&&od.accountPassword!==undefined){delete od.accountPassword;localStorage.setItem(k,JSON.stringify(od))}}catch(_){}}}catch(e){}}
+function loadSettings(){try{let raw=localStorage.getItem(SETTINGS_KEY);if(!raw){raw=localStorage.getItem('v78.6.3-settings')||localStorage.getItem('v78.6.2-settings')||localStorage.getItem('v78.6.1-settings')||localStorage.getItem('v78.6.0-settings')||localStorage.getItem('v78.3.0-settings')||localStorage.getItem('v78.1.0-settings')||localStorage.getItem('v70.14.2-settings')||localStorage.getItem('v70.14.1-settings');if(raw){const old=JSON.parse(raw||'{}');delete old.accountPassword;localStorage.setItem(SETTINGS_KEY,JSON.stringify(old));raw=JSON.stringify(old)}}const d=JSON.parse(raw||'{}');fields.forEach(k=>{if(d[k]!==undefined)$(k).value=d[k]});if($('accountId')&&!String($('accountId').value||'').trim())$('accountId').value=localStorage.getItem(ACCOUNT_ID_KEY)||'';const pw=sessionStorage.getItem(ACCOUNT_SECRET_KEY)||'';if($('accountPassword'))$('accountPassword').value=pw;for(const k of ['v78.6.3-settings','v78.6.2-settings','v78.6.1-settings','v78.6.0-settings','v78.5.0-settings']){try{const od=JSON.parse(localStorage.getItem(k)||'null');if(od&&od.accountPassword!==undefined){delete od.accountPassword;localStorage.setItem(k,JSON.stringify(od))}}catch(_){}}}catch(e){}}
 fields.forEach(k=>$(k).addEventListener('change',saveSettings));
 function settingsPayload(){return{budget:Number($('budget').value||0),trade_budget:Number($('tradeBudget').value||0),long_budget:Number($('longBudget').value||0),saving_goal_krw:Number($('savingGoal').value||1000000),monthly_saving_krw:Number($('monthlySaving').value||100000),current_saving_krw:Number($('currentSaving').value||0),risk_pct:Number($('riskPct').value||0),stop_pct:Number($('stopPct').value||0),min_rrr:Number($('minRrr').value||1.5),trust_mode:$('trustMode').value,mode:$('mode').value,top_n:Number($('topN').value||60),held:$('held').value.trim()}}
 function updateMoneyNote(){const budget=Number($('budget').value||0),trade=Number($('tradeBudget').value||0),risk=Number($('riskPct').value||0);$('moneyNote').textContent=`현재 설정: 전체 ${fmt(budget)}원 · 종목당 ${fmt(trade)}원 · 최대 허용손실 ${fmt(budget*risk/100)}원`}
@@ -259,8 +260,9 @@ document.querySelectorAll('[data-trade]').forEach(btn=>btn.addEventListener('cli
 ['budget','tradeBudget','riskPct'].forEach(id=>$(id).addEventListener('input',()=>{saveSettings();updateMoneyNote()}));
 async function analyze(){saveSettings();const btn=$('analyzeBtn');btn.disabled=true;btn.textContent='분석 중…';showInitialLoading();$('status').textContent=allResults.length?'저장 결과를 보여주는 동안 최신 시장·종목을 갱신 중입니다.':'빠른 스마트 분석 중입니다. 처음에는 10~30초 정도 걸릴 수 있습니다.';try{const headers={'Content-Type':'application/json'},pin=$('appPin').value.trim();if(pin)headers['X-App-Pin']=pin;const res=await fetch('/api/analyze',{method:'POST',headers,body:JSON.stringify(settingsPayload())});const data=await res.json();if(!res.ok||!data.ok)throw new Error(data.error||'분석 실패');serverSessions=data.sessions||serverSessions;annotateRankChanges(data);updateRecommendationHistory(data);renderData(data);saveSnapshot(data);saveRankBaseline(data);$('status').textContent=`분석 완료 · 정상 ${data.summary.valid}/${data.summary.total}개 · 분석군 ${data.summary.universe_size??data.summary.total}개 · 기준통과 ${data.summary.qualified_buy_count??0} / 실제배정 ${data.summary.buyable_count??0} / 근접 ${data.summary.near_buy_count??0} · ${data.summary.universe_policy||''} · ${data.summary.elapsed_sec}초${data.cache_hit?' · 캐시 사용':''}`}catch(e){showInitialError(e.message);$('status').textContent=`최신 분석 오류: ${e.message}${allResults.length?' · 저장된 결과를 유지합니다.':''}`}finally{btn.disabled=false;btn.textContent='최신 분석'}}
 $('analyzeBtn').addEventListener('click',analyze);$('clearHistoryBtn').addEventListener('click',()=>{localStorage.removeItem(HISTORY_KEY);renderPerformance();renderFeedback();$('status').textContent='추천 사후 성적표 기록을 삭제했습니다.'});$('clearSavedBtn').addEventListener('click',()=>{localStorage.removeItem(SNAPSHOT_KEY);allResults=[];$('cards').innerHTML='';$('topPick').hidden=true;$('noBuyCard').hidden=true;$('status').textContent='저장 결과를 삭제했습니다.'});
-async function checkConnection(){try{const r=await fetch('/health',{cache:'no-store'}),d=await r.json();if(!r.ok||!d.ok)throw new Error();serverSessions=d.sessions||serverSessions;$('onlineState').textContent=`온라인 · ${d.version}`;$('onlineDot').classList.add('ok');$('connectionText').textContent=d.pin_required?'온라인 접속 · PIN 보호 사용 중':'온라인 접속 가능 · 홈 화면 추가 지원'}catch(e){$('onlineState').textContent='서버 연결 안 됨';$('onlineDot').classList.add('bad')}}
-$('shareBtn').addEventListener('click',async()=>{const d={title:'V78.8.0 강세장 적응·검색분리 통합판',text:'최종 행동판 + 순위변화 + 추천 사후 성적표 + 위험기반 수량' ,url:location.href};try{if(navigator.share)await navigator.share(d);else{await navigator.clipboard.writeText(location.href);$('status').textContent='주소를 복사했습니다.'}}catch(e){}});window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('installBtn').classList.remove('hidden')});$('installBtn').addEventListener('click',async()=>{if(!installPrompt)return;installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;$('installBtn').classList.add('hidden')});document.querySelectorAll('.bottom-nav button').forEach(btn=>btn.addEventListener('click',()=>{if(btn.dataset.action==='held'){portfolioMode='held';renderPortfolio();if(accountConnected)portfolioCloudLoad(false,{force:true});$('portfolioCenter')?.scrollIntoView({behavior:'smooth',block:'start'});return}const el=$(btn.dataset.scroll);if(el)el.scrollIntoView({behavior:'smooth',block:'start'})}));
+async function checkConnection(){try{const r=await fetch('/health',{cache:'no-store',credentials:'include'}),d=await r.json();if(!r.ok||!d.ok)throw new Error();serverSessions=d.sessions||serverSessions;if(d.storage)updateStorageDiagnostics(d.storage);$('onlineState').textContent=`온라인 · ${d.version}`;$('onlineDot').classList.add('ok');$('connectionText').textContent=d.pin_required?'온라인 접속 · PIN 보호 사용 중':'온라인 접속 가능 · 홈 화면 추가 지원'}catch(e){$('onlineState').textContent='서버 연결 안 됨';$('onlineDot').classList.add('bad');updateStorageDiagnostics({durability:'ephemeral-or-unknown',last_error:'서버 상태 확인 실패'})}
+}
+$('shareBtn').addEventListener('click',async()=>{const d={title:'V78.8.1 강세장 적응·검색분리 통합판',text:'최종 행동판 + 순위변화 + 추천 사후 성적표 + 위험기반 수량' ,url:location.href};try{if(navigator.share)await navigator.share(d);else{await navigator.clipboard.writeText(location.href);$('status').textContent='주소를 복사했습니다.'}}catch(e){}});window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('installBtn').classList.remove('hidden')});$('installBtn').addEventListener('click',async()=>{if(!installPrompt)return;installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;$('installBtn').classList.add('hidden')});document.querySelectorAll('.bottom-nav button').forEach(btn=>btn.addEventListener('click',()=>{if(btn.dataset.action==='held'){portfolioMode='held';renderPortfolio();if(accountConnected)portfolioCloudLoad(false,{force:true});$('portfolioCenter')?.scrollIntoView({behavior:'smooth',block:'start'});return}const el=$(btn.dataset.scroll);if(el)el.scrollIntoView({behavior:'smooth',block:'start'})}));
 loadSettings();updateMoneyNote();const restored=restoreSnapshot();checkConnection();setTimeout(()=>analyze(),restored?1200:450);if('serviceWorker'in navigator){navigator.serviceWorker.register('/static/sw.js').then(reg=>reg.update()).catch(()=>{});navigator.serviceWorker.addEventListener('controllerchange',()=>{if(!sessionStorage.getItem('v7863-reloaded')){sessionStorage.setItem('v7863-reloaded','1');location.reload()}})}
 
 // V78.3 — persistent holdings + watchlist center
@@ -272,6 +274,7 @@ let portfolioSyncTimer=null;
 let portfolioMode='held';
 let accountConnected=false;
 let lastSyncMeta={serverCount:null,localCount:0,updatedAt:null,persistent:null,state:'locked',message:'계정 연결 대기'};
+let lastAccountErrorCode='',lastStorageStatus=null;
 function currentAccountId(){return String($('accountId')?.value||'').trim().toLowerCase()}
 function accountLocalKey(){const id=currentAccountId();return id?`${PORTFOLIO_KEY_BASE}:${id}`:`${PORTFOLIO_KEY_BASE}:locked`}
 function pendingKey(){const id=currentAccountId();return id?`${PORTFOLIO_KEY_BASE}:pending:${id}`:`${PORTFOLIO_KEY_BASE}:pending:locked`}
@@ -283,6 +286,13 @@ function setAccountStatus(text,ok=false){if($('accountStatus')){$('accountStatus
 function setPending(v){try{if(v)localStorage.setItem(pendingKey(),'1');else localStorage.removeItem(pendingKey())}catch(e){}}
 function isPending(){try{return localStorage.getItem(pendingKey())==='1'}catch(e){return false}}
 function fmtSyncTime(v){if(!v)return'-';try{return new Date(v).toLocaleString('ko-KR',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}catch(e){return String(v)}}
+function updateStorageDiagnostics(storage){
+ lastStorageStatus=storage||lastStorageStatus;const el=$('storageDiagnostics');if(!el)return;const st=lastStorageStatus||{};
+ if(st.durability==='database'){el.dataset.state='ok';el.innerHTML='💾 <b>PostgreSQL 영구저장 연결됨</b> · 계정/보유종목은 앱 재배포와 분리되어 저장됩니다.'}
+ else if(st.durability==='persistent-disk'){el.dataset.state='ok';el.innerHTML='💾 <b>Persistent Disk 감지</b> · 계정/보유종목 파일을 영구 디스크에 저장합니다.'}
+ else{el.dataset.state='warn';el.innerHTML='⚠️ <b>영구 서버 저장소 미확인</b> · 현재 파일 저장만 사용 중입니다. Render 무료 Web Service에서는 재배포/재시작 시 계정이 없어질 수 있습니다. DATABASE_URL 연결을 권장합니다.'}
+ if(st.last_error){el.dataset.state='warn';el.innerHTML+=`<br><small>DB 오류: ${escapeText(st.last_error)}</small>`}
+}
 function updateSyncDiagnostics(patch={}){
  lastSyncMeta={...lastSyncMeta,...patch};
  const el=$('syncDiagnostics');if(!el)return;
@@ -290,9 +300,10 @@ function updateSyncDiagnostics(patch={}){
  const state=!accountConnected?'locked':(lastSyncMeta.state||'warn');
  el.dataset.state=state;
  el.innerHTML=!accountConnected
-  ?`🔒 <b>자산 잠김</b> · 개인계정 연결 후 서버 자산을 표시합니다. · 이 기기 보존자료 ${local}개`
-  :`🔎 <b>동기화 진단</b> · ☁️ 서버 <b>${server==null?'확인 중':server+'개'}</b> · 📱 이 기기 <b>${local}개</b> · ${lastSyncMeta.persistent===false?'⚠️ 서버 임시저장소':'💾 영구저장 '+(lastSyncMeta.persistent===true?'확인':'확인 중')} · 마지막 ${fmtSyncTime(lastSyncMeta.updatedAt)}${isPending()?' · ⏳ 업로드 대기':''}`;
+  ?`🔒 <b>자산 잠김</b> · 개인계정 연결 후 서버 자산을 표시합니다. · 이 기기 보존자료 ${local}개${lastAccountErrorCode==='ACCOUNT_NOT_FOUND'?' · 서버 계정기록 없음':''}`
+  :`🔎 <b>동기화 진단</b> · ☁️ 서버 <b>${server==null?'확인 중':server+'개'}</b> · 📱 이 기기 <b>${local}개</b> · ${lastSyncMeta.persistent===true?'💾 영구저장 확인':'⚠️ 영구저장 미확인'} · 마지막 ${fmtSyncTime(lastSyncMeta.updatedAt)}${isPending()?' · ⏳ 업로드 대기':''}`;
 }
+function updateRecoveryButton(){const b=$('recoverAccountBtn');if(!b)return;const local=portfolioLocalLoad(true).length;b.hidden=!(lastAccountErrorCode==='ACCOUNT_NOT_FOUND'&&local>0);if(!b.hidden)b.textContent=`📱 이 기기 ${local}개 자료로 계정 복구`;}
 function portfolioLocalLoad(includeLegacy=false){
  let merged=loadJson(accountLocalKey(),[]); if(!Array.isArray(merged))merged=[];
  const id=currentAccountId();
@@ -319,20 +330,23 @@ function portfolioMerge(a,b){
  }return out.slice(0,100)
 }
 async function accountConnect({migrateLegacy=false,auto=false}={}){
- const id=currentAccountId(),pw=String($('accountPassword')?.value||'');
+ const id=currentAccountId(),pw=String($('accountPassword')?.value||'');lastAccountErrorCode='';updateRecoveryButton();
  // A persistent HttpOnly cookie may authenticate this device even when the password field is empty.
  if(!auto && id.length<6 && pw.length<8){accountConnected=false;renderPortfolio();setAccountStatus('🔒 개인 계정 ID와 비밀번호를 입력하세요.');updateSyncDiagnostics();return false}
  try{
-  const r=await fetch('/api/account/status',{headers:portfolioHeaders(),cache:'no-store',credentials:'same-origin'}),d=await r.json();
-  if(!r.ok||!d.ok)throw new Error(d.error||'계정 연결 실패');
-  accountConnected=true;
+  const r=await fetch('/api/account/status',{headers:portfolioHeaders(),cache:'no-store',credentials:'include'}),d=await r.json();
+  if(d.storage)updateStorageDiagnostics(d.storage);
+  if(!r.ok||!d.ok){lastAccountErrorCode=d.code||'ACCOUNT_REQUIRED';accountConnected=false;renderPortfolio();updateSyncDiagnostics({state:'locked',message:d.error||'계정 연결 실패'});updateRecoveryButton();const local=portfolioLocalLoad(true).length;
+   if(lastAccountErrorCode==='ACCOUNT_NOT_FOUND'){const orphan=Number(d.orphaned_server_rows||0),extra=orphan>0?` 서버에는 자산 ${orphan}개가 남아 있지만 인증기록이 없어 보안상 자동 재등록을 막았습니다. 서버 DB/백업 복구가 필요합니다.`:(local?` 이 기기에 ${local}개 자산자료가 남아 있어 아래 ‘이 기기 자료로 계정 복구’를 사용할 수 있습니다.`:' 이 기기에는 복구자료가 없습니다. 자산이 남아 있는 PC/휴대폰에서 복구하세요.');setAccountStatus(`🔒 서버에서 ${id||'해당'} 계정을 찾지 못했습니다.${extra}`)}
+   else if(!auto)setAccountStatus(`🔒 계정 연결 실패: ${d.error||'인증 실패'}`);else setAccountStatus('🔒 자동 로그인 세션을 확인하지 못했습니다. ID·비밀번호로 다시 연결하세요.');return false}
+  accountConnected=true;lastAccountErrorCode='';
   if(d.account_id&&d.account_id!==id){$('accountId').value=d.account_id}
-  saveSettings();if(pw)saveAccountSecret();
+  saveSettings();if(pw)saveAccountSecret();updateRecoveryButton();
   setAccountStatus(`🔐 ${d.account_id} 계정 연결됨 · ${d.auth_via==='cookie'?'자동 로그인 세션':'비밀번호 인증'} · 이 계정 자산만 표시`,true);
   await portfolioCloudLoad(migrateLegacy,{force:true});return true;
  }catch(e){
-  accountConnected=false;renderPortfolio();updateSyncDiagnostics({state:'locked',message:e.message});
-  if(!auto)setAccountStatus(`🔒 계정 연결 실패: ${e.message}`);else setAccountStatus('🔒 저장된 로그인 세션이 없습니다. 휴대폰에서 처음 한 번 계정을 연결하세요.');
+  accountConnected=false;renderPortfolio();updateSyncDiagnostics({state:'locked',message:e.message});updateRecoveryButton();
+  if(!auto)setAccountStatus(`🔒 계정 연결 오류: ${e.message}`);else setAccountStatus('🔒 서버 연결/로그인 세션 확인 실패 · ID와 비밀번호로 다시 연결하세요.');
   return false;
  }
 }
@@ -341,6 +355,15 @@ async function createPrivateAccount(){
  if(id.length<6||pw.length<8){setAccountStatus('ID는 6자 이상, 비밀번호는 8자 이상으로 만들어주세요.');return}
  try{const r=await fetch('/api/account/register',{method:'POST',headers:baseHeaders(),credentials:'same-origin',body:JSON.stringify({account_id:id,password:pw})}),d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'계정 생성 실패');$('accountId').value=d.account_id;saveSettings();saveAccountSecret();setAccountStatus(`✅ ${d.account_id} 개인계정을 만들었습니다. 이 기기 자동 로그인도 설정되었습니다.`,true);await accountConnect()}catch(e){setAccountStatus(`계정 생성 실패: ${e.message}`)}
 }
+async function recoverAccountFromLocal(){
+ const id=currentAccountId(),pw=String($('accountPassword')?.value||''),local=portfolioLocalLoad(true);
+ if(id.length<6||pw.length<8){setAccountStatus('복구하려면 기존 개인 ID와 사용할 비밀번호를 입력하세요.');return}
+ if(!local.length){setAccountStatus('이 기기에 복구할 자산자료가 없습니다. 기존 자료가 보이는 다른 기기에서 복구하세요.');return}
+ if(!confirm(`서버의 ${id} 계정기록이 사라진 경우 이 기기의 ${local.length}개 자산자료로 계정을 다시 만들고 서버에 복원합니다. 계속할까요?`))return;
+ try{const r=await fetch('/api/account/recover-local',{method:'POST',headers:baseHeaders(),credentials:'include',body:JSON.stringify({account_id:id,password:pw,local_count:local.length})}),d=await r.json();if(d.storage)updateStorageDiagnostics(d.storage);if(!r.ok||!d.ok)throw new Error(d.error||'계정 복구 실패');accountConnected=true;lastAccountErrorCode='';saveSettings();saveAccountSecret();portfolioRows=portfolioMerge(portfolioRows,local);savePortfolioLocalSafe(portfolioRows);renderPortfolio();updateRecoveryButton();const up=await portfolioCloudSave(true,portfolioRows);setAccountStatus(up.verified?`✅ ${id} 계정을 다시 만들고 이 기기 자산 ${portfolioRows.length}개를 서버에 복구했습니다.`:`📱 계정은 복구됐지만 서버 자산 업로드 확인이 필요합니다: ${up.error||''}`,up.verified)}catch(e){setAccountStatus(`계정 복구 실패: ${e.message}`)}
+}
+function exportPortfolioBackup(){const rows=portfolioLocalLoad(true),id=currentAccountId();if(!rows.length){$('portfolioStatus').textContent='백업할 보유/관심종목이 없습니다.';return}const payload={format:'v78-portfolio-backup-v1',version:'V78.8.1',account_id:id,exported_at:new Date().toISOString(),rows};const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`stock-portfolio-${id||'backup'}-${new Date().toISOString().slice(0,10)}.json`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);$('portfolioStatus').textContent=`⬇️ 자산 백업 ${rows.length}개를 저장했습니다. 비밀번호는 백업파일에 포함되지 않습니다.`}
+async function importPortfolioBackupFile(file){if(!file)return;try{const d=JSON.parse(await file.text());if(!d||d.format!=='v78-portfolio-backup-v1'||!Array.isArray(d.rows))throw new Error('지원하지 않는 백업파일입니다.');const current=portfolioLocalLoad(true),merged=portfolioMerge(current,d.rows);if(!confirm(`백업 ${d.rows.length}개를 현재 ${currentAccountId()||'기기'} 자료와 병합할까요? 병합 후 ${merged.length}개가 됩니다.`))return;portfolioRows=merged;savePortfolioLocalSafe(merged);setPending(true);renderPortfolio();updateSyncDiagnostics({localCount:merged.length});if(accountConnected){const up=await portfolioCloudSave(true,merged);$('portfolioStatus').textContent=up.verified?`✅ 백업 복원 + 서버 동기화 완료 · ${merged.length}개`:`📱 백업은 기기에 복원됨 · 서버 동기화 재시도 필요`}else $('portfolioStatus').textContent=`📱 백업 ${merged.length}개를 기기에 복원했습니다. 계정 연결 후 서버로 동기화하세요.`}catch(e){$('portfolioStatus').textContent=`백업 복원 실패: ${e.message}`}}
 function oldSyncKeyFromSettings(){try{for(const k of [SETTINGS_KEY,'v78.3.0-settings','v78.1.0-settings']){const d=JSON.parse(localStorage.getItem(k)||'{}');if(d&&d.syncKey)return String(d.syncKey).trim()}}catch(e){}return''}
 async function importLegacyData(){
  if(!accountConnected){$('portfolioStatus').textContent='🔒 먼저 새 개인계정을 연결하세요.';return}
@@ -367,7 +390,7 @@ async function portfolioCloudLoad(migrateLegacy=false,{force=false}={}){
  $('portfolioStatus').textContent='☁️ 서버의 최신 보유종목 확인 중…';
  try{
   const r=await fetch('/api/portfolio',{headers:portfolioHeaders(),cache:'no-store',credentials:'same-origin'}),d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'동기화 실패');
-  const server=Array.isArray(d.rows)?d.rows:[];
+  if(d.storage)updateStorageDiagnostics(d.storage);const server=Array.isArray(d.rows)?d.rows:[];
   // V78.7.2 safety rule: a deploy, empty server response, or stale device must never erase a non-empty portfolio.
   // Merge both copies first. Explicit deletion still goes through portfolioSave(), which writes the resulting list to both sides.
   let next=portfolioMerge(server,local);
@@ -394,7 +417,7 @@ async function portfolioCloudSave(quiet=false,rowsSnapshot=null){
   if(!r.ok||!d.ok||d.verified!==true)throw new Error(d.error||'서버 저장 재검증 실패');
   const returned=Array.isArray(d.rows)?d.rows:[];if(portfolioRowsSignature(returned)!==expected)throw new Error('서버 저장 결과가 보낸 목록과 일치하지 않습니다.');
   const vr=await fetch('/api/portfolio',{headers:portfolioHeaders(),cache:'no-store',credentials:'same-origin'}),vd=await vr.json();if(!vr.ok||!vd.ok)throw new Error(vd.error||'저장 후 조회 검증 실패');
-  const verifiedRows=Array.isArray(vd.rows)?vd.rows:[];if(portfolioRowsSignature(verifiedRows)!==expected)throw new Error('저장 후 다시 읽은 목록이 일치하지 않습니다.');
+  if(vd.storage)updateStorageDiagnostics(vd.storage);const verifiedRows=Array.isArray(vd.rows)?vd.rows:[];if(portfolioRowsSignature(verifiedRows)!==expected)throw new Error('저장 후 다시 읽은 목록이 일치하지 않습니다.');
   setPending(false);const stamp=vd.updated_at||d.updated_at||new Date().toISOString();try{localStorage.setItem(lastSyncKey(),stamp)}catch(e){}
   updateSyncDiagnostics({serverCount:verifiedRows.length,localCount:verifiedRows.length,updatedAt:stamp,persistent:vd.persistent,state:vd.persistent===false?'warn':'ok'});
   if(!quiet)$('portfolioStatus').textContent=`✅ 기기+서버 저장 확인 · ${currentAccountId()} · ${verifiedRows.length}개 종목`;
@@ -475,7 +498,7 @@ async function changeAccountPassword(){
 }
 async function logoutAccount(){try{await fetch('/api/account/logout',{method:'POST',headers:baseHeaders(),credentials:'same-origin'})}catch(e){}accountConnected=false;if($('accountPassword'))$('accountPassword').value='';try{sessionStorage.removeItem(ACCOUNT_SECRET_KEY)}catch(e){}renderPortfolio();updateSyncDiagnostics({state:'locked',serverCount:null});setAccountStatus('🔒 로그아웃했습니다. 기기 자료는 보존되며 자산목록은 숨겨집니다.');}
 $('generateAccountBtn')?.addEventListener('click',()=>{const rnd=crypto?.getRandomValues?Array.from(crypto.getRandomValues(new Uint8Array(5))).map(x=>x.toString(36)).join('').slice(0,8):Math.random().toString(36).slice(2,10);$('accountId').value=`stock-${rnd}`;saveSettings();setAccountStatus('새 개인 ID를 만들었습니다. 비밀번호를 정한 뒤 “새 개인계정 만들기”를 누르세요.')});
-$('createAccountBtn')?.addEventListener('click',createPrivateAccount);$('connectAccountBtn')?.addEventListener('click',()=>{saveAccountSecret();accountConnect()});$('syncNowBtn')?.addEventListener('click',syncNow);$('importLegacyBtn')?.addEventListener('click',importLegacyData);$('changeAccountIdBtn')?.addEventListener('click',changeAccountId);$('changePasswordBtn')?.addEventListener('click',changeAccountPassword);$('logoutAccountBtn')?.addEventListener('click',logoutAccount);
-$('accountId')?.addEventListener('change',()=>{accountConnected=false;renderPortfolio();saveSettings();setAccountStatus('계정 ID가 변경되었습니다. 비밀번호를 확인하고 다시 연결하세요.')});$('accountPassword')?.addEventListener('change',()=>{accountConnected=false;portfolioRows=[];renderPortfolio();saveAccountSecret();setAccountStatus('비밀번호가 입력되었습니다. 다시 계정 연결을 누르세요.')});
+$('createAccountBtn')?.addEventListener('click',createPrivateAccount);$('connectAccountBtn')?.addEventListener('click',()=>{saveAccountSecret();accountConnect()});$('recoverAccountBtn')?.addEventListener('click',recoverAccountFromLocal);$('syncNowBtn')?.addEventListener('click',syncNow);$('exportPortfolioBtn')?.addEventListener('click',exportPortfolioBackup);$('importPortfolioBtn')?.addEventListener('click',()=>$('importPortfolioFile')?.click());$('importPortfolioFile')?.addEventListener('change',async e=>{await importPortfolioBackupFile(e.target.files?.[0]);e.target.value=''});$('importLegacyBtn')?.addEventListener('click',importLegacyData);$('changeAccountIdBtn')?.addEventListener('click',changeAccountId);$('changePasswordBtn')?.addEventListener('click',changeAccountPassword);$('logoutAccountBtn')?.addEventListener('click',logoutAccount);
+$('accountId')?.addEventListener('change',()=>{accountConnected=false;lastAccountErrorCode='';portfolioRows=portfolioLocalLoad(true);renderPortfolio();saveSettings();updateRecoveryButton();setAccountStatus('계정 ID가 변경되었습니다. 비밀번호를 확인하고 다시 연결하세요.')});$('accountPassword')?.addEventListener('change',()=>{accountConnected=false;renderPortfolio();saveAccountSecret();updateRecoveryButton();setAccountStatus('비밀번호가 입력되었습니다. 다시 계정 연결을 누르세요.')});
 $('resetMyDataBtn')?.addEventListener('click',async()=>{if(!accountConnected){$('portfolioStatus').textContent='🔒 먼저 개인계정을 연결하세요.';return}if(!confirm(`현재 ${currentAccountId()} 계정의 보유·관심·모으기 자료를 모두 지울까요?`))return;try{await fetch('/api/portfolio',{method:'DELETE',headers:portfolioHeaders()});portfolioRows=[];saveJson(accountLocalKey(),[]);renderPortfolio();$('portfolioStatus').textContent='현재 개인계정의 저장자료를 초기화했습니다.'}catch(e){$('portfolioStatus').textContent='초기화 실패: '+e.message}});
-portfolioRows=portfolioLocalLoad(false);renderPortfolio();updateSyncDiagnostics();setTimeout(()=>accountConnect({auto:true}),250);
+portfolioRows=portfolioLocalLoad(false);renderPortfolio();updateSyncDiagnostics();updateRecoveryButton();setTimeout(()=>accountConnect({auto:true}),250);

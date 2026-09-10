@@ -10,9 +10,10 @@ import webbrowser
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, render_template, request, g
+from state_store import StateStore
 from engine import analyze, analyze_search, search_instruments, fetch_fundamentals, fetch_recent_issues
 
-APP_VERSION = 'V78.8.0'
+APP_VERSION = 'V78.8.1'
 app = Flask(__name__)
 
 _cache_lock = threading.Lock()
@@ -30,6 +31,9 @@ os.makedirs(DATA_DIR, exist_ok=True)
 PORTFOLIO_FILE = os.path.join(DATA_DIR, 'portfolio.json')
 PORTFOLIO_BACKUP_FILE = os.path.join(DATA_DIR, 'portfolio.backup.json')
 ACCOUNTS_FILE = os.path.join(DATA_DIR, 'accounts.json')
+ACCOUNTS_BACKUP_FILE = os.path.join(DATA_DIR, 'accounts.backup.json')
+DATABASE_URL = os.environ.get('DATABASE_URL', '').strip()
+_state_store = StateStore(DATA_DIR, DATABASE_URL)
 _portfolio_lock = threading.Lock()
 _account_lock = threading.Lock()
 ACCOUNT_COOKIE = 'v7863_account_session'
@@ -68,15 +72,19 @@ def _issue_account_session(account_id):
         _write_accounts(accounts)
     return f'{account_id}.{token}', expires_at
 
+def _request_is_https():
+    proto = str(request.headers.get('X-Forwarded-Proto') or '').split(',')[0].strip().lower()
+    return bool(request.is_secure or proto == 'https')
+
 def _set_account_cookie(response, cookie_value, expires_at=None):
     if not cookie_value:
         return response
     response.set_cookie(ACCOUNT_COOKIE, cookie_value, max_age=ACCOUNT_SESSION_DAYS*86400,
-                        httponly=True, samesite='Lax', secure=bool(request.is_secure), path='/')
+                        httponly=True, samesite='Lax', secure=_request_is_https(), path='/')
     return response
 
 def _clear_account_cookie(response):
-    response.delete_cookie(ACCOUNT_COOKIE, path='/', samesite='Lax', secure=bool(request.is_secure))
+    response.delete_cookie(ACCOUNT_COOKIE, path='/', samesite='Lax', secure=_request_is_https())
     return response
 
 def _normalize_account_id(value):
@@ -84,23 +92,13 @@ def _normalize_account_id(value):
     return ''.join(ch for ch in raw if ch.isalnum() or ch in {'-','_','.'})[:40]
 
 def _read_accounts():
-    try:
-        with open(ACCOUNTS_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            return data if isinstance(data, dict) else {}
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        try:
-            with open(PORTFOLIO_BACKUP_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                return data if isinstance(data, dict) else {}
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
-            return {}
+    # V78.8.1: account registry and portfolio now share the same persistence abstraction.
+    # The old code accidentally used portfolio.backup.json as an account fallback, which could
+    # make a valid ID appear to be missing after a damaged/missing accounts.json.
+    return _state_store.read('accounts', ACCOUNTS_FILE, ACCOUNTS_BACKUP_FILE)
 
 def _write_accounts(data):
-    tmp = ACCOUNTS_FILE + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, separators=(',', ':'))
-    os.replace(tmp, ACCOUNTS_FILE)
+    _state_store.write('accounts', data, ACCOUNTS_FILE, ACCOUNTS_BACKUP_FILE)
 
 def _password_hash(password, salt_hex, iterations=180000):
     return hashlib.pbkdf2_hmac('sha256', str(password).encode('utf-8'), bytes.fromhex(salt_hex), iterations).hex()
@@ -163,30 +161,18 @@ def _portfolio_owner_legacy():
     return hashlib.sha256(seed.encode('utf-8')).hexdigest()[:24]
 
 def _read_portfolio_store():
-    try:
-        with open(PORTFOLIO_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            return data if isinstance(data, dict) else {}
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return {}
+    return _state_store.read('portfolios', PORTFOLIO_FILE, PORTFOLIO_BACKUP_FILE)
 
 def _write_portfolio_store(data):
-    # Keep the last valid full store before replacement so an app upgrade cannot silently destroy portfolios.
-    try:
-        if os.path.exists(PORTFOLIO_FILE) and os.path.getsize(PORTFOLIO_FILE) > 2:
-            with open(PORTFOLIO_FILE, 'r', encoding='utf-8') as src:
-                previous = json.load(src)
-            if isinstance(previous, dict):
-                btmp = PORTFOLIO_BACKUP_FILE + '.tmp'
-                with open(btmp, 'w', encoding='utf-8') as bf:
-                    json.dump(previous, bf, ensure_ascii=False, separators=(',', ':')); bf.flush(); os.fsync(bf.fileno())
-                os.replace(btmp, PORTFOLIO_BACKUP_FILE)
-    except Exception:
-        pass
-    tmp = PORTFOLIO_FILE + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, separators=(',', ':')); f.flush(); os.fsync(f.fileno())
-    os.replace(tmp, PORTFOLIO_FILE)
+    _state_store.write('portfolios', data, PORTFOLIO_FILE, PORTFOLIO_BACKUP_FILE)
+
+def _storage_status():
+    st = _state_store.status()
+    # /var/data is only truly durable when the host has an attached persistent disk. A path
+    # name alone is not proof, so report it as host-filesystem unless PostgreSQL is configured.
+    st['configured_data_dir'] = os.path.abspath(DATA_DIR)
+    st['render_free_disk_warning'] = (not DATABASE_URL and os.environ.get('RENDER','').lower() in {'1','true','yes'})
+    return st
 
 def _portfolio_digest(rows):
     payload = json.dumps(rows if isinstance(rows, list) else [], ensure_ascii=False, sort_keys=True, separators=(',', ':'))
@@ -304,6 +290,7 @@ def health():
         'pin_required': bool(APP_PIN),
         'cache_ttl_seconds': CACHE_TTL,
         'sessions': _market_sessions(),
+        'storage': _storage_status(),
     })
 
 
@@ -457,15 +444,76 @@ def api_account_status():
         return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.'}), 401
     owner, error = _account_auth()
     if error:
-        return jsonify({'ok': False, 'error': error}), 401
+        code = 'ACCOUNT_NOT_FOUND' if '등록되지 않은' in error else ('ACCOUNT_BAD_PASSWORD' if '비밀번호' in error else 'ACCOUNT_REQUIRED')
+        orphaned_rows = 0
+        if code == 'ACCOUNT_NOT_FOUND':
+            aid = _normalize_account_id(request.headers.get('X-Account-ID'))
+            if aid:
+                orphan_owner = hashlib.sha256(('account:' + aid).encode('utf-8')).hexdigest()[:32]
+                with _portfolio_lock:
+                    orphan_rec = _read_portfolio_store().get(orphan_owner, {})
+                orphan_rows = orphan_rec.get('rows', []) if isinstance(orphan_rec, dict) else []
+                orphaned_rows = len(orphan_rows) if isinstance(orphan_rows, list) else 0
+        return jsonify({'ok': False, 'error': error, 'code': code, 'orphaned_server_rows': orphaned_rows, 'storage': _storage_status()}), 401
     account_id = getattr(g, 'account_id', '')
     auth_via = getattr(g, 'account_auth_via', '')
     cookie_value = None
     if auth_via == 'password':
         cookie_value, expires_at = _issue_account_session(account_id)
     resp = jsonify({'ok': True, 'account_id': account_id, 'version': APP_VERSION,
-                    'auth_via': auth_via, 'session_persistent': True})
+                    'auth_via': auth_via, 'session_persistent': True, 'storage': _storage_status()})
     return _set_account_cookie(resp, cookie_value) if cookie_value else resp
+
+@app.post('/api/account/recover-local')
+def api_account_recover_local():
+    """Re-create a missing server account only when its server portfolio is also empty.
+
+    This is intentionally conservative: if server-side rows still exist for the ID, recovery is
+    refused because the server no longer has a password verifier to prove ownership. The user
+    should restore the account database/backup instead. If both registry and portfolio were lost
+    by an ephemeral deploy, a browser holding a local portfolio can safely create a fresh empty
+    server namespace and upload its local copy immediately afterwards.
+    """
+    if not _authorized():
+        return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.'}), 401
+    payload = request.get_json(silent=True) or {}
+    account_id = _normalize_account_id(payload.get('account_id'))
+    password = str(payload.get('password') or '')
+    local_count = max(0, min(100, int(payload.get('local_count') or 0)))
+    if len(account_id) < 6 or len(password) < 8:
+        return jsonify({'ok': False, 'error': 'ID 6자 이상, 비밀번호 8자 이상이 필요합니다.'}), 400
+    if local_count < 1:
+        return jsonify({'ok': False, 'error': '이 기기에 복구할 보유/관심종목 자료가 없습니다.', 'code': 'NO_LOCAL_RECOVERY_DATA'}), 400
+    owner = hashlib.sha256(('account:' + account_id).encode('utf-8')).hexdigest()[:32]
+    with _account_lock:
+        accounts = _read_accounts()
+        if account_id in accounts:
+            return jsonify({'ok': False, 'error': '서버에 계정이 존재합니다. 일반 계정 연결을 사용하세요.', 'code': 'ACCOUNT_EXISTS'}), 409
+        with _portfolio_lock:
+            store = _read_portfolio_store()
+            existing = store.get(owner, {})
+            existing_rows = existing.get('rows', []) if isinstance(existing, dict) else []
+            if isinstance(existing_rows, list) and existing_rows:
+                return jsonify({'ok': False, 'error': '서버에는 기존 자산이 남아 있지만 계정 인증기록이 없습니다. 보안을 위해 자동 재등록하지 않습니다.', 'code': 'SERVER_DATA_ORPHANED'}), 409
+        salt = os.urandom(16).hex(); iterations = 210000
+        accounts[account_id] = {
+            'salt': salt, 'iterations': iterations,
+            'password_hash': _password_hash(password, salt, iterations),
+            'created_at': _now_iso(), 'recovered_from_local_at': _now_iso()
+        }
+        _write_accounts(accounts)
+    cookie_value, expires_at = _issue_account_session(account_id)
+    resp = jsonify({'ok': True, 'account_id': account_id, 'version': APP_VERSION,
+                    'recovered': True, 'storage': _storage_status()})
+    return _set_account_cookie(resp, cookie_value, expires_at)
+
+
+@app.get('/api/storage/status')
+def api_storage_status():
+    if not _authorized():
+        return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.'}), 401
+    return jsonify({'ok': True, 'version': APP_VERSION, 'storage': _storage_status()})
+
 
 @app.post('/api/account/change-id')
 def api_account_change_id():
@@ -570,10 +618,12 @@ def api_portfolio_get():
         record = store.get(owner, {})
     rows = record.get('rows', []) if isinstance(record, dict) else []
     rows = rows if isinstance(rows, list) else []
+    storage = _storage_status()
     return jsonify({'ok': True, 'rows': rows,
                     'row_count': len(rows), 'checksum': _portfolio_digest(rows),
                     'updated_at': record.get('updated_at') if isinstance(record, dict) else None,
-                    'persistent': os.path.abspath(DATA_DIR).startswith('/var/data'),
+                    'persistent': storage.get('durability') in {'database','persistent-disk'},
+                    'storage': storage,
                     'account_id': getattr(g, 'account_id', ''), 'auth_via': getattr(g, 'account_auth_via', ''),
                     'version': APP_VERSION})
 
@@ -632,7 +682,7 @@ def api_portfolio_put():
             return jsonify({'ok':False,'error':'서버 저장 후 재검증에 실패했습니다.','code':'SAVE_VERIFY_FAILED','version':APP_VERSION}),500
     except OSError as exc:
         return jsonify({'ok':False,'error':f'서버 저장소 쓰기 오류: {str(exc)[:120]}','code':'STORAGE_WRITE_FAILED','version':APP_VERSION}),500
-    return jsonify({'ok':True,'rows':clean,'row_count':len(clean),'checksum':checksum,'verified':True,'updated_at':updated,'version':APP_VERSION})
+    return jsonify({'ok':True,'rows':clean,'row_count':len(clean),'checksum':checksum,'verified':True,'updated_at':updated,'storage':_storage_status(),'version':APP_VERSION})
 
 @app.delete('/api/portfolio')
 def api_portfolio_delete():
