@@ -1,32 +1,32 @@
-# V78.7.2 multi-source search + portfolio sector audit
+# V78.8.0 강세장 적응형 후보 + 검색/단타 분리 감사노트
 
-## Fixed in this build
-- Korean symbol search is no longer dependent on a single FinanceDataReader KRX master.
-- Search order now combines local/curated KRX metadata, FinanceDataReader KRX listing, Naver mobile autocomplete/legacy autocomplete, and Yahoo for US symbols.
-- Verified fallback added for 우리기술 (032820) so it remains searchable even if the KRX master is temporarily unavailable on a cloud host.
-- 우리기술 is mapped to the app sector `전력/원전` with source industry context `코스닥 전기·전자 / 원전 계측제어` and theme tags 원전/SMR/계측제어.
-- Exact Korean stock lookups try Naver stock profile metadata as a secondary source for canonical name/exchange/source industry.
-- Market filters now distinguish domestic stocks vs domestic ETFs instead of mixing them in the autocomplete result.
+## 확인된 원인
 
-## My Stocks / sector improvements
-- Portfolio records now persist `sector`, `sector_major`, `source_sector`, `theme_tags`, and `sector_updated_at` on both device and server.
-- New holdings are resolved again at save time, so typing a name without clicking the autocomplete item is less likely to save an unresolved name-only key.
-- New holdings are analyzed in the background after save to populate current price and sector automatically.
-- Existing holdings missing sector are backfilled in the background from `/api/symbols` after account sync, then saved back to device/server.
-- Portfolio cards show mapped app sector, source industry (when available), and theme tags.
-- `내 종목 섹터` summary shows sector distribution and flags unclassified holdings for refresh.
-- Portfolio merge now preserves non-empty canonical name/code/sector metadata and prefers the newer analysis snapshot, preventing an older device copy from blanking server-side sector metadata.
-- Cloud-save verification signature now includes canonical/security/sector metadata, not only avg price and quantity.
+1. `smart` 분석군이 강세장에도 사실상 `시총 상위 18 + 인기 12 + curated` 중심이라 시장 전체 상승폭 대비 후보 풀이 너무 좁었습니다.
+2. `build_opportunity_score()`는 강세장에 +4점만 주고 실제 매수 컷/모멘텀/손익비 문턱은 거의 고정이라 시장 국면 변화가 후보 수에 충분히 반영되지 않았습니다.
+3. 계좌 위험 엔진이 후순위 후보 수량을 0으로 줄인 뒤 UI가 `qty > 0`만 매수후보로 집계하여, "종목 기준 통과"와 "현재 계좌에서 실제 신규수량 배정"이 같은 개념처럼 보였습니다.
+4. 단기 자동선별 목록은 위험점수 1인 보통~중간 변동성 종목까지 섹션 제목에서 전부 `고위험 단타`라고 표시했습니다. 즉, 종목 위험도와 매매기간/전략 라벨이 섞여 있었습니다.
+5. 직접 검색 결과와 자동 단기 스캐너의 화면 맥락이 명확히 분리되지 않아 사용자가 "검색해서 고위험 단타로 분류됐다"고 해석할 수 있었습니다.
 
-## Upgrade/data safety retained
-- Permanent browser key remains `v78-portfolio-account-v1`; app version upgrades do not change the portfolio storage key.
-- Server/device portfolios are merged non-destructively on sync.
-- Browser and server backup protections remain enabled.
-- Render still needs a persistent disk at `/var/data` with `DATA_DIR=/var/data` for server-side persistence across redeploys.
+## V78.8.0 변경
 
-## Validation performed
-- Python syntax: app.py / engine.py
-- JavaScript syntax: static/app.js
-- manifest JSON parse
-- HTML duplicate ID scan
-- Offline provider-failure simulation: `우리기술` resolves to `032820`, KOSDAQ, app sector `전력/원전` even when FDR/Naver network calls are unavailable.
+- 한국 강세장 `smart` 모드 분석군을 최대 시총 상위 50 + 인기 18 + 핵심군으로 자동 확장.
+- KOSPI/KOSDAQ 1일 변화만이 아니라 5일 추세도 함께 사용해 1차 시장국면 판정.
+- 분석된 종목의 `20일선 위 비율`, `5일 상승 비율`, `모멘텀 55점 이상 비율`, `지수 5일 수익률`을 합친 시장확산 점수 추가.
+- 지수 강세 + 시장확산 확인 시에만 적응형 분할 후보 허용.
+- 적응형 후보도 데이터품질 65점 이상, 추세 확인, 손익비, 과열(RSI/5일급등/ATR) 안전장치를 우회하지 않음.
+- `기본 엄격기준 통과 / 강세장 적응형 통과 / 계좌 위험한도 순번대기 / 진입근접`을 별도 상태로 분리.
+- 계좌 위험 엔진에서 수량 축소 후 투자금/예상손익/계획손실/분할매수 계획을 다시 계산하도록 수정.
+- 단기 스캐너의 전략명과 위험도를 분리: 위험점수 1~2는 `단기 모멘텀`, 3 이상에서만 `고위험 단타`.
+- 직접 검색 결과는 `🔎 직접 검색 분석`으로 명시하고 `자동 단타분류 아님`을 표시.
+- 내 종목센터의 영구 portfolio key `v78-portfolio-account-v1`은 변경하지 않아 버전업 때문에 자산저장 위치가 바뀌지 않음.
+
+## 검증
+
+- `python -m py_compile app.py engine.py` 통과
+- `node --check static/app.js` 통과
+- `python -m json.tool static/manifest.json` 통과
+- 합성 강세장 10종목 테스트: 시장확산 75.3점 → 적응형 후보 승격 확인
+- hard_block 종목은 강세장 적응형으로 승격되지 않음 확인
+- ATR 2.5%, RSI 65, 5일 +6% 합성 종목: `단기 모멘텀 / 보통~중간`으로 분류되어 무조건 `고위험 단타`가 되지 않음 확인
+- 포트폴리오 위험한도 초과 종목: `allocation_wait=True`로 남고 후보 자체가 사라지지 않음 확인

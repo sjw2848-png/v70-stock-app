@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, render_template, request, g
 from engine import analyze, analyze_search, search_instruments, fetch_fundamentals, fetch_recent_issues
 
-APP_VERSION = 'V78.7.2'
+APP_VERSION = 'V78.8.0'
 app = Flask(__name__)
 
 _cache_lock = threading.Lock()

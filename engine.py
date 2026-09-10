@@ -512,7 +512,17 @@ def build_scalp_candidates(results, settings, limit=2):
         if abs(_safe_float(x.get('gap_pct'),0))>=5: risk_points+=1; reasons.append(f"갭 {abs(_safe_float(x.get('gap_pct'),0)):.1f}%")
         if r5>=15: risk_points+=1; reasons.append(f'5일 +{r5:.1f}% 급등')
         if rv>=2: reasons.append(f'거래량 {rv:.2f}배')
-        risk_level='🚨 매우 높음' if risk_points>=5 else ('⚠️ 높음' if risk_points>=3 else '⚠️ 중상')
+        # Do not brand every short-term momentum name as 'high risk'.  The old lane
+        # always called the entire list 고위험단타 even when risk_points was only 1.
+        # Risk is now a separate attribute from the trading horizon.
+        if risk_points >= 5:
+            risk_level='🚨 매우 높음'; trade_class='고위험 단타'
+        elif risk_points >= 3:
+            risk_level='⚠️ 높음'; trade_class='고위험 단타'
+        elif risk_points >= 2:
+            risk_level='🟠 중간~높음'; trade_class='단기 모멘텀'
+        else:
+            risk_level='🟡 보통~중간'; trade_class='단기 모멘텀'
         entry=_safe_float(x.get('entry_krw'),x.get('price_krw'))
         target_pct=float(np.clip(max(1.5,atr*.35),1.5,4.5))
         stop_pct=float(np.clip(max(1.0,atr*.22),1.0,2.8))
@@ -534,14 +544,14 @@ def build_scalp_candidates(results, settings, limit=2):
             trigger='급등 추격 금지 · 지지 확인 뒤 반등 캔들에서만 진입'
         pool.append({
             'name':x.get('name'),'code':x.get('code'),'category':x.get('category'),'sector':x.get('sector'),
-            'score':round(score,1),'risk_level':risk_level,'risk_reasons':reasons[:4],
+            'score':round(score,1),'risk_level':risk_level,'trade_class':trade_class,'risk_points':risk_points,'risk_reasons':reasons[:4],
             'entry_krw':_safe_int(entry),'target_krw':target,'stop_krw':stop,'qty':qty,
             'target_pct':round(target_pct,1),'stop_pct':round(stop_pct,1),
             'max_loss_krw':_safe_int(scalp_loss_cap),'planned_risk_krw':_safe_int(qty*risk_share),
             'risk_per_share_krw':_safe_int(risk_share),'sizing_limiter':'단타 전용 소액+손실 제한',
             'buy_time':x.get('buy_time'),'trigger':trigger,'tech':x.get('tech'),
             'rvol':x.get('rvol'),'momentum':x.get('momentum'),'opportunity_score':x.get('opportunity_score'),
-            'note':'고위험 단타 관찰 후보입니다. 일봉/거래량 기반 선별이라 장중 호가·체결강도 확인 없이 즉시 매수하면 안 됩니다.'
+            'note':('고위험 단타 자동선별 후보입니다.' if risk_points>=3 else '단기 모멘텀 자동선별 후보입니다.') + ' 직접 검색 때문에 분류되는 것이 아니며, 일봉/거래량 기반이라 장중 호가·체결강도 확인 없이 즉시 매수하면 안 됩니다.'
         })
     pool.sort(key=lambda x:x['score'], reverse=True)
     return pool[:limit]
@@ -1595,14 +1605,22 @@ def diagnostic_market():
         if len(kp)>=6: result['kospi_5d']=(float(kp['Close'].iloc[-1])/float(kp['Close'].iloc[-6])-1)*100
         if len(kq)>=6: result['kosdaq_5d']=(float(kq['Close'].iloc[-1])/float(kq['Close'].iloc[-6])-1)*100
         mn, mx = min(kpchg, kqchg), max(kpchg, kqchg)
+        k5=[v for v in (result.get('kospi_5d'), result.get('kosdaq_5d')) if v is not None]
+        avg5=float(np.mean(k5)) if k5 else 0.0
+        # One weak morning should not erase an established multi-day uptrend, while a
+        # genuine one-day shock still has priority.  This becomes the coarse regime;
+        # analyze() later confirms it with stock-universe breadth.
         if mn <= -3:
-            result['kr_state'], result['guide'] = '🚨 급락장', '신규 진입을 줄이고 리스크를 낮추는 구간으로 분류합니다.'
-        elif mn <= -1:
-            result['kr_state'], result['guide'] = '🔴 약세장', '돌파 추격보다 보수적인 진입이 유리한 구간으로 분류합니다.'
-        elif mx >= 1.5:
-            result['kr_state'], result['guide'] = '🟢 강세장', '시장 모멘텀이 강한 구간입니다. 그래도 종목별 손절 기준은 유지하세요.'
+            result['kr_state'], result['guide'] = '🚨 급락장', '당일 충격이 큰 구간입니다. 신규 진입을 줄이고 리스크를 낮춥니다.'
+        elif avg5 <= -4 and mn <= -1:
+            result['kr_state'], result['guide'] = '🔴 약세장', '5일 추세와 당일 흐름이 함께 약합니다. 보수적인 진입이 유리합니다.'
+        elif avg5 >= 2.0 or mx >= 1.5:
+            result['kr_state'], result['guide'] = '🟢 강세장', '당일·5일 지수 흐름 중 강세 신호가 확인됩니다. 종목 확산도까지 확인해 후보 기준을 탄력 적용합니다.'
+        elif mn <= -1.5:
+            result['kr_state'], result['guide'] = '🔴 약세장', '당일 하락 압력이 큽니다. 추격보다 회복 신호를 우선합니다.'
         else:
-            result['kr_state'], result['guide'] = '🟡 혼조세', '종목별 신호 차이가 큰 구간입니다. 선별 접근이 필요합니다.'
+            result['kr_state'], result['guide'] = '🟡 혼조세', '지수 방향만으로 판단하지 않고 종목 확산도와 개별 추세를 함께 확인합니다.'
+        result['kr_regime_5d_avg'] = round(avg5, 2)
     except Exception as e:
         result['guide'] = f'지수 수신 실패: {str(e)[:80]}'
     result['state'] = result['kr_state']  # backward-compatible display field
@@ -2087,8 +2105,10 @@ def build_portfolio_risk_engine(ranked, settings):
             x['qty']=qty
             x['portfolio_adjusted']=True
             x['portfolio_original_qty']=old
-            x['decision']=str(x.get('decision',''))+' · 포트폴리오 위험으로 수량 축소'
-            adjustments.append({'code':x.get('code'),'name':x.get('name'),'from_qty':old,'to_qty':qty,'sector':sec})
+            x['allocation_wait']=bool(qty==0 and x.get('opportunity_eligible'))
+            x['decision']=str(x.get('decision',''))+(' · 계좌 위험한도 순번 대기' if qty==0 else ' · 포트폴리오 위험으로 수량 축소')
+            _refresh_result_sizing(x)
+            adjustments.append({'code':x.get('code'),'name':x.get('name'),'from_qty':old,'to_qty':qty,'sector':sec,'allocation_wait':bool(qty==0)})
         used_risk += qty*risk_ps
         sector_value[sec]=sector_value.get(sec,0.0)+qty*entry
     return {
@@ -2102,6 +2122,95 @@ def build_portfolio_risk_engine(ranked, settings):
         'note':'V78 계좌 위험 가드레일. 개별 신호를 강화하지 않고 동시 손절위험·섹터 집중 시 수량만 축소합니다.'
     }
 
+
+def _refresh_result_sizing(x):
+    """Recompute money fields after adaptive/portfolio quantity changes."""
+    qty=max(0, int(_safe_float(x.get('qty'),0)))
+    entry=_safe_float(x.get('entry_krw'),0); target=_safe_float(x.get('target1_krw'),0); stop=_safe_float(x.get('stop1_krw'),0)
+    x['invested_krw']=_safe_int(qty*entry)
+    x['expected_profit_krw']=_safe_int(qty*max(target-entry,0))
+    x['expected_loss_krw']=_safe_int(qty*min(stop-entry,0))
+    x['planned_risk_krw']=_safe_int(qty*max(entry-stop,0))
+    max_loss=max(_safe_float(x.get('max_loss_krw'),0),0)
+    x['risk_budget_used_pct']=round(x['planned_risk_krw']/max_loss*100,1) if max_loss else 0.0
+    if entry>0:
+        x['split_plan']=build_split_trade_plan(_safe_int(entry), _safe_int(target), _safe_int(x.get('target2_krw') or target), _safe_int(stop), qty, x.get('tech'))
+    return x
+
+
+def build_market_breadth_context(results, market_info):
+    """Confirm coarse index regime with breadth from the analyzed stock universe."""
+    out={}
+    for m in ('KR','US'):
+        pool=[x for x in results if x.get('ok') and (('US' if x.get('category')=='US' or x.get('market')=='US' else 'KR')==m) and x.get('category')!='ETF']
+        n=len(pool)
+        above=sum(1 for x in pool if x.get('above_ma20'))/n*100 if n else 0.0
+        positive=sum(1 for x in pool if _safe_float(x.get('recent5_pct'),0)>0)/n*100 if n else 0.0
+        mom55=sum(1 for x in pool if _safe_float(x.get('momentum'),0)>=55)/n*100 if n else 0.0
+        medmom=float(np.median([_safe_float(x.get('momentum'),0) for x in pool])) if n else 0.0
+        index5=_safe_float(market_info.get('sp500_5d') if m=='US' else market_info.get('kospi_5d'),0)
+        index_component=float(np.clip(50+index5*10,0,100))
+        score=above*.35+positive*.30+mom55*.20+index_component*.15 if n else index_component*.25
+        state=str(market_info.get('us_state') if m=='US' else market_info.get('kr_state') or '')
+        # At least a modest breadth confirmation is required before thresholds are relaxed.
+        confirmed=bool(n>=5 and (('강세' in state and score>=52) or score>=64 or (above>=65 and positive>=60 and medmom>=55)))
+        if confirmed and score>=68: label='🔥 확산 강세'
+        elif confirmed: label='🟢 강세 확인'
+        elif score>=52: label='🟡 지수 강세·확산 보통' if '강세' in state else '🟡 혼조'
+        else: label='⚪ 확산 약함'
+        out[m]={'score':round(float(score),1),'label':label,'confirmed_bull':confirmed,'sample':n,
+                'above_ma20_pct':round(above,1),'positive_5d_pct':round(positive,1),'momentum55_pct':round(mom55,1),
+                'median_momentum':round(medmom,1),'index_5d_pct':round(index5,2),'index_state':state}
+    return out
+
+
+def apply_regime_adaptive_candidates(results, settings, market_info):
+    """Promote *near* candidates only when index strength is confirmed by market breadth.
+
+    Hard blocks, stale/poor data, extreme overheat and positive-risk-reward requirements are
+    never bypassed.  This fixes the old behavior where a bull market only added +4 score points
+    but thresholds stayed almost unchanged, leaving the scanner overly sparse.
+    """
+    ctx=build_market_breadth_context(results, market_info)
+    trust=str(settings.get('trust_mode','balanced'))
+    rules={
+        'conservative':(68,1.20,56,.25),
+        'balanced':(62,1.08,52,.35),
+        'aggressive':(58,1.00,50,.45),
+    }
+    cut,rr_floor,mom_floor,size_factor=rules.get(trust,rules['balanced'])
+    for x in results:
+        if not x.get('ok'): continue
+        m='US' if x.get('category')=='US' or x.get('market')=='US' else 'KR'
+        c=ctx[m]
+        x['market_breadth_score']=c['score']; x['market_breadth_label']=c['label']
+        x['adaptive_candidate']=False; x['near_buy_candidate']=False
+        x['candidate_origin']='strict' if x.get('opportunity_eligible') else 'none'
+        if x.get('held_price_krw') or x.get('hard_block'): continue
+        if x.get('opportunity_eligible'):
+            x['candidate_reason']='기본 매수 기준 통과'
+            continue
+        score=_safe_float(x.get('opportunity_score'),0); rrr=_safe_float(x.get('rrr'),0); mom=_safe_float(x.get('momentum'),0)
+        rsi=_safe_float(x.get('rsi'),50); r5=_safe_float(x.get('recent5_pct'),0); atr=_safe_float(x.get('atr_pct'),0)
+        dq=_safe_float((x.get('data_quality') or {}).get('score'),x.get('data_quality_score') or 0)
+        cap=max(0,_safe_int(x.get('qty_capacity'),0))
+        trend=bool(x.get('above_ma20') and (x.get('macd_bull') or r5>=0.5 or _safe_float(x.get('relative_strength_5d'),0)>=0.5 or _safe_float(x.get('rvol'),1)>=1.05))
+        extreme=bool(rsi>=90 or r5>=25 or atr>=14)
+        if c['confirmed_bull'] and dq>=65 and cap>0 and not extreme and trend and score>=cut and rrr>=rr_floor and mom>=mom_floor:
+            q=max(1,min(cap,int(round(cap*size_factor))))
+            # Sparse validation can reduce the starter size but cannot create a position from bad data.
+            qf=_safe_float(x.get('data_quality_position_factor'),1.0)
+            if 0<qf<1: q=max(1,min(q,int(max(1,round(q*qf)))))
+            x['qty']=q; x['opportunity_eligible']=True; x['adaptive_candidate']=True; x['candidate_origin']='regime_adaptive'
+            x['decision']='강세장 확산 확인 · 소액 분할 후보'
+            x['opportunity_label']='🟢 강세장 분할 진입'
+            x['candidate_reason']=f"{c['label']} {c['score']:.0f}점 · 20일선 위 추세 확인 · 기회 {score:.0f}점"
+            _refresh_result_sizing(x)
+        elif score>=55 and rrr>=1.0 and mom>=48 and trend and dq>=65 and not extreme:
+            x['near_buy_candidate']=True
+            x['candidate_reason']=f"진입 근접 · 기회 {score:.0f}점 · 손익비 1:{rrr:.2f} · 추세 확인"
+    return ctx
+
 def analyze(settings: Dict[str, Any]):
     started = time.time()
     fx = get_usdkrw_rate()
@@ -2111,7 +2220,15 @@ def analyze(settings: Dict[str, Any]):
     settings['_sp500_5d'] = market.get('sp500_5d') or 0.0
     mode = settings.get('mode', 'curated')
     top_n = max(10, min(int(settings.get('top_n', 60)), 150))
-    kr = build_universe(mode, top_n)
+    # In the old smart mode only the top 18 + popular 12 names were scanned even when
+    # the market was strong.  That made a broad rally look artificially empty.
+    if mode == 'smart' and '강세' in str(market.get('kr_state') or ''):
+        strong_top=min(max(int(top_n*0.75),36),50)
+        kr = {**load_krx_top(strong_top), **fetch_popular(18), **KR_CURATED}
+        universe_policy=f'강세장 확장 스캔 · 시총상위 {strong_top} + 인기 18 + 핵심군'
+    else:
+        kr = build_universe(mode, top_n)
+        universe_policy=f'{mode} 기본 스캔'
     us = dict(US_CURATED)
     etf = dict(KR_ETFS)
     held = parse_held(settings.get('held', ''))
@@ -2143,6 +2260,7 @@ def analyze(settings: Dict[str, Any]):
             results.append(fut.result())
 
     valid = [x for x in results if x.get('ok')]
+    market_context = apply_regime_adaptive_candidates(valid, settings, market)
     ranked = sorted(
         [x for x in valid if not x.get('hard_block')],
         key=lambda x: (_safe_float(x.get('opportunity_score'), 0), _safe_float(x.get('rrr'), 0), _safe_float(x.get('momentum'), 0)),
@@ -2174,12 +2292,25 @@ def analyze(settings: Dict[str, Any]):
     sector_analysis = build_sector_analytics(valid)
     scalp_candidates = build_scalp_candidates(valid, settings, limit=2)
     accumulation_candidates = build_accumulation_candidates(valid, settings, limit=6)
+    qualified_all=[x for x in ranked if x.get('opportunity_eligible')]
+    qualified_individual=[x for x in qualified_all if x.get('category')!='ETF']
+    qualified_etf=[x for x in qualified_all if x.get('category')=='ETF']
+    adaptive_all=[x for x in qualified_all if x.get('adaptive_candidate')]
+    near_all=[x for x in ranked if x.get('near_buy_candidate') and not x.get('opportunity_eligible')]
+    allocation_wait=[x for x in qualified_all if x.get('allocation_wait')]
     summary = {
         'total': len(results),
         'valid': len(valid),
         'universe_size': len(tasks),
+        'universe_policy': universe_policy,
         'recommended': len(individual_buyable),
         'buyable_count': len(buyable),
+        'qualified_buy_count': len(qualified_all),
+        'individual_qualified_count': len(qualified_individual),
+        'etf_qualified_count': len(qualified_etf),
+        'adaptive_buy_count': len(adaptive_all),
+        'near_buy_count': len(near_all),
+        'allocation_wait_count': len(allocation_wait),
         'individual_buyable_count': len(individual_buyable),
         'etf_buyable_count': len(etf_buyable),
         'scalp_count': len(scalp_candidates),
@@ -2190,7 +2321,7 @@ def analyze(settings: Dict[str, Any]):
         'elapsed_sec': round(time.time() - started, 1),
         'usdkrw': round(fx, 2),
     }
-    return {'market': market, 'summary': summary, 'sector_analysis': sector_analysis, 'portfolio_risk': portfolio_risk, 'scalp_candidates': scalp_candidates, 'accumulation_candidates': accumulation_candidates, 'results': results}
+    return {'market': market, 'market_context': market_context, 'summary': summary, 'sector_analysis': sector_analysis, 'portfolio_risk': portfolio_risk, 'scalp_candidates': scalp_candidates, 'accumulation_candidates': accumulation_candidates, 'results': results}
 
 # ---------------------------------------------------------------------
 # V70.4 on-demand symbol search
@@ -2445,6 +2576,14 @@ def analyze_search(query: str, settings: Dict[str, Any], market_hint: str = 'AUT
     if item.get('ok') and search_avg_price > 0:
         item['holding_input_price_native'] = round(search_avg_price, 4)
         item['holding_input_currency'] = 'USD' if market == 'US' else 'KRW'
+    if item.get('ok'):
+        # A user-initiated lookup is always displayed as search analysis.  Risk/volatility
+        # can still be shown, but the lookup itself must never be labelled a scalp strategy.
+        item['analysis_origin']='user_search'
+        item['analysis_origin_label']='🔎 직접 검색 분석'
+        item['auto_strategy_lane']='검색 분석 (자동 단타분류 아님)'
+        item['decision_base']=item.get('decision')
+        item['decision']='직접 검색 · '+str(item.get('decision') or '분석 완료')
     if not item.get('ok'):
         raise ValueError(item.get('error') or '종목 데이터 분석에 실패했습니다.')
     return {
