@@ -3,6 +3,7 @@ import contextlib
 import io
 import math
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Dict, Any, List, Tuple
@@ -15,6 +16,8 @@ import requests
 import yfinance as yf
 import FinanceDataReader as fdr
 
+import market_calendar
+
 # ---------------------------------------------------------------------
 # V78.1 ADAPTIVE LANES + THEME MOMENTUM + AMOUNT-BASED ACCUMULATION
 # - V69 core ideas retained
@@ -23,24 +26,94 @@ import FinanceDataReader as fdr
 # - position size uses BOTH trade budget and risk-per-trade
 # ---------------------------------------------------------------------
 
+# ---------------------------------------------------------------------
+# V78.11.0 shared caches
+# - One lock per expensive provider call so N analysis threads at a cold start do not each
+#   download the full KRX listing / FX / index data (the old "thundering herd").
+# - Short TTLs keep intraday data fresh while making repeated analysis, live search and the
+#   auto report (which calls /api/search per candidate) nearly free.
+# ---------------------------------------------------------------------
+class _TTLCache:
+    def __init__(self, ttl, maxsize=256):
+        self.ttl = ttl; self.maxsize = maxsize
+        self._data = {}; self._lock = threading.Lock(); self._key_locks = {}
+
+    def get_or_set(self, key, fn, ttl=None, accept=lambda v: True):
+        ttl = self.ttl if ttl is None else ttl
+        now = time.time()
+        with self._lock:
+            hit = self._data.get(key)
+            if hit and now - hit[0] < ttl:
+                return hit[1]
+            klock = self._key_locks.setdefault(key, threading.Lock())
+        with klock:
+            with self._lock:
+                hit = self._data.get(key)
+                if hit and time.time() - hit[0] < ttl:
+                    return hit[1]
+            value = fn()
+            if accept(value):
+                with self._lock:
+                    self._data[key] = (time.time(), value)
+                    if len(self._data) > self.maxsize:
+                        for k, _ in sorted(self._data.items(), key=lambda kv: kv[1][0])[:max(1, self.maxsize // 4)]:
+                            self._data.pop(k, None)
+                            self._key_locks.pop(k, None)
+            return value
+
+    def clear(self):
+        with self._lock:
+            self._data.clear()
+
+
+_PRICE_CACHE = _TTLCache(ttl=90, maxsize=400)
+_MARKET_CACHE = _TTLCache(ttl=180, maxsize=16)
+_LISTING_CACHE = _TTLCache(ttl=6 * 3600, maxsize=8)
+PRICE_HISTORY_ROWS = 500   # ~2 years of daily bars: enough for MA120 and a meaningful validation sample
+
+# KRX short codes: legacy 6 digits and the 2024+ alphanumeric reform (e.g. 0091C0).
+_KR_CODE_RE = re.compile(r'^\d{4}[0-9A-HJ-NP-TV-Z][0-9KLMN]$')
+
+
+def is_kr_code(value):
+    return bool(_KR_CODE_RE.match(str(value or '').strip().upper()))
+
+
+def _krx_listing():
+    def load():
+        try:
+            df = fdr.StockListing('KRX')
+            return df if df is not None and not df.empty else None
+        except Exception:
+            return None
+    return _LISTING_CACHE.get_or_set('KRX', load, accept=lambda v: v is not None)
+
+
 _KR_ETF_CACHE = None
 _KR_ETF_CACHE_AT = 0.0
+_KR_ETF_LOCK = threading.Lock()
 
 def get_kr_etf_mapping(force=False):
     global _KR_ETF_CACHE, _KR_ETF_CACHE_AT
     if not force and _KR_ETF_CACHE is not None and time.time()-_KR_ETF_CACHE_AT < 6*3600:
         return _KR_ETF_CACHE
-    m={}
-    try:
-        df=fdr.StockListing('ETF/KR')
-        ccol=next((c for c in ['Symbol','Code','단축코드'] if c in df.columns),None); ncol=next((c for c in ['Name','한글 종목약명','종목명'] if c in df.columns),None)
-        if ccol and ncol:
-            for _,r in df.iterrows():
-                code=_normalize_kr_code(r[ccol]); name=str(r[ncol]).strip()
-                if code and name: m[code]=name
-    except Exception: pass
-    for code,info in KR_ETFS.items(): m.setdefault(code,str(info.get('name',code)))
-    _KR_ETF_CACHE=m; _KR_ETF_CACHE_AT=time.time(); return m
+    with _KR_ETF_LOCK:
+        if not force and _KR_ETF_CACHE is not None and time.time()-_KR_ETF_CACHE_AT < 6*3600:
+            return _KR_ETF_CACHE
+        m={}
+        try:
+            df=fdr.StockListing('ETF/KR')
+            ccol=next((c for c in ['Symbol','Code','단축코드'] if c in df.columns),None); ncol=next((c for c in ['Name','한글 종목약명','종목명'] if c in df.columns),None)
+            if ccol and ncol:
+                for code_raw,name_raw in zip(df[ccol].tolist(), df[ncol].tolist()):
+                    code=_normalize_kr_code(code_raw); name=str(name_raw).strip()
+                    if code and name: m[code]=name
+        except Exception: pass
+        fetched=len(m)>len(KR_ETFS)
+        for code,info in KR_ETFS.items(): m.setdefault(code,str(info.get('name',code)))
+        # A failed provider call is retried after 10 minutes instead of pinning the fallback for 6 hours.
+        _KR_ETF_CACHE=m; _KR_ETF_CACHE_AT=time.time() if fetched else time.time()-6*3600+600
+        return m
 
 GRADE_THRESHOLDS = {
     'S_momentum': 80, 'S_kelly': 0.10, 'S_rrr': 2.0,
@@ -153,6 +226,10 @@ def _safe_int(v, default=0):
 
 
 def get_usdkrw_rate(fallback=1400.0):
+    return _MARKET_CACHE.get_or_set('USDKRW', lambda: _fetch_usdkrw_rate(None), accept=lambda v: v is not None) or float(fallback)
+
+
+def _fetch_usdkrw_rate(fallback=1400.0):
     try:
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             fx = yf.download('KRW=X', period='5d', progress=False, auto_adjust=False, threads=False)
@@ -164,7 +241,7 @@ def get_usdkrw_rate(fallback=1400.0):
                 return val
     except Exception:
         pass
-    return float(fallback)
+    return None if fallback is None else float(fallback)
 
 
 def calc_atr(df, period=14):
@@ -589,51 +666,71 @@ def calc_grade(momentum, kelly, rrr):
 
 
 def _normalize_kr_code(value):
-    code = str(value or '').strip().replace('KRX:', '')
+    code = str(value or '').strip().upper().replace('KRX:', '')
+    if len(code) == 7 and code.startswith('A') and is_kr_code(code[1:]):
+        code = code[1:]   # KRX full-form 'A005930'
     if code.startswith('KR') and len(code) >= 9:
         code = code[3:9]
+    for suffix in ('.KS', '.KQ'):
+        if code.endswith(suffix):
+            code = code[:-3]
+    if is_kr_code(code):
+        return code
     m = re.search(r'(\d{6})', code)
     if m:
         return m.group(1)
     return code.zfill(6) if code.isdigit() else code
 
 
+_KRX_MAP_LOCK = threading.Lock()
+
+
 def get_krx_mapping(force=False):
     """Current KRX name/code/meta cache. FDR is primary; overrides keep critical symbols usable during provider outages."""
     global _KRX_CACHE, _KRX_CODE_TO_NAME, _KRX_META_BY_CODE, _KRX_CACHE_AT
-    if (not force and _KRX_CACHE is not None and _KRX_CODE_TO_NAME is not None
-            and time.time() - _KRX_CACHE_AT < 6 * 3600):
+    def fresh():
+        return (not force and _KRX_CACHE is not None and _KRX_CODE_TO_NAME is not None
+                and time.time() - _KRX_CACHE_AT < 6 * 3600)
+    if fresh():
         return _KRX_CACHE
-    mapping, reverse, meta = {}, {}, {}
-    try:
-        df = fdr.StockListing('KRX')
-        ccol = next((c for c in ['Code', 'Symbol', '단축코드'] if c in df.columns), df.columns[0])
-        ncol = next((c for c in ['Name', '한글 종목약명', '종목명'] if c in df.columns), df.columns[1])
-        scol = next((c for c in ['Sector','Industry','업종','업종명'] if c in df.columns), None)
-        mcol = next((c for c in ['Market','시장구분','시장'] if c in df.columns), None)
-        for _, r in df.iterrows():
-            code = _normalize_kr_code(r[ccol])
-            name = str(r[ncol]).strip()
-            if not code or not name or not code.isdigit():
-                continue
+    with _KRX_MAP_LOCK:
+        if fresh():
+            return _KRX_CACHE
+        mapping, reverse, meta = {}, {}, {}
+        df = _krx_listing()
+        if df is not None:
+            try:
+                ccol = next((c for c in ['Code', 'Symbol', '단축코드'] if c in df.columns), df.columns[0])
+                ncol = next((c for c in ['Name', '한글 종목약명', '종목명'] if c in df.columns), df.columns[1])
+                scol = next((c for c in ['Sector','Industry','업종','업종명'] if c in df.columns), None)
+                mcol = next((c for c in ['Market','시장구분','시장'] if c in df.columns), None)
+                codes = df[ccol].tolist(); names = df[ncol].tolist()
+                sectors = df[scol].tolist() if scol else [None] * len(df)
+                markets = df[mcol].tolist() if mcol else [None] * len(df)
+                for code_raw, name_raw, sec_raw, mk_raw in zip(codes, names, sectors, markets):
+                    code = _normalize_kr_code(code_raw)
+                    name = str(name_raw).strip()
+                    if not code or not name or not is_kr_code(code):
+                        continue
+                    mapping[name] = code
+                    reverse[code] = name
+                    sector = str(sec_raw).strip() if sec_raw is not None and pd.notna(sec_raw) else ''
+                    market = str(mk_raw).strip() if mk_raw is not None and pd.notna(mk_raw) else ''
+                    meta[code] = {'name': name, 'source_sector': sector, 'market': market, 'source':'KRX/FDR'}
+            except Exception:
+                pass
+        fetched = bool(mapping)
+        # Verified/manual fallbacks survive temporary KRX/FDR listing failures or delayed renames.
+        for code, name in KR_NAME_OVERRIDES.items():
             mapping[name] = code
             reverse[code] = name
-            sector = str(r[scol]).strip() if scol and pd.notna(r[scol]) else ''
-            market = str(r[mcol]).strip() if mcol and pd.notna(r[mcol]) else ''
-            meta[code] = {'name': name, 'source_sector': sector, 'market': market, 'source':'KRX/FDR'}
-    except Exception:
-        pass
-
-    # Verified/manual fallbacks survive temporary KRX/FDR listing failures or delayed renames.
-    for code, name in KR_NAME_OVERRIDES.items():
-        mapping[name] = code
-        reverse[code] = name
-        base = dict(KR_META_OVERRIDES.get(code) or {})
-        base.setdefault('name', name); base.setdefault('source','verified fallback')
-        meta[code] = {**meta.get(code, {}), **base}
-
-    _KRX_CACHE, _KRX_CODE_TO_NAME, _KRX_META_BY_CODE, _KRX_CACHE_AT = mapping, reverse, meta, time.time()
-    return _KRX_CACHE
+            base = dict(KR_META_OVERRIDES.get(code) or {})
+            base.setdefault('name', name); base.setdefault('source','verified fallback')
+            meta[code] = {**meta.get(code, {}), **base}
+        # A failed listing is retried after ~10 minutes instead of being pinned for 6 hours.
+        stamp = time.time() if fetched else time.time() - 6 * 3600 + 600
+        _KRX_CACHE, _KRX_CODE_TO_NAME, _KRX_META_BY_CODE, _KRX_CACHE_AT = mapping, reverse, meta, stamp
+        return _KRX_CACHE
 
 
 def get_krx_meta(code):
@@ -759,35 +856,51 @@ def get_current_kr_name(code, fallback=''):
     return (_KRX_CODE_TO_NAME or {}).get(code) or KR_NAME_OVERRIDES.get(code) or fallback or code
 
 
+def _is_preferred_or_special(code, name):
+    """Preferred shares (code not ending in 0, or names like 삼성전자우/현대차2우B), SPAC, REIT, ETF/ETN."""
+    code = str(code or ''); name = str(name or '')
+    if code and code[-1] != '0':
+        return True
+    if re.search(r'\d?우[A-C]?(\(전환\))?$', name):
+        return True
+    return any(x in name for x in ['스팩', '리츠', 'KODEX', 'TIGER', '인버스', '선물', 'ETN'])
+
+
 def load_krx_top(n=60):
     out = {}
+    df = _krx_listing()
+    if df is None:
+        return out
     try:
-        df = fdr.StockListing('KRX')
         mcol = next((c for c in ['Marcap', 'MarketCap', '시가총액'] if c in df.columns), None)
         ccol = next((c for c in ['Code', 'Symbol', '단축코드'] if c in df.columns), df.columns[0])
         ncol = next((c for c in ['Name', '한글 종목약명', '종목명'] if c in df.columns), df.columns[1])
         scol = next((c for c in ['Sector','Industry','업종','업종명'] if c in df.columns), None)
-        if mcol:
-            df = df.sort_values(mcol, ascending=False)
-        for _, r in df.iterrows():
+        mkcol = next((c for c in ['Market','시장구분','시장'] if c in df.columns), None)
+        view = df.sort_values(mcol, ascending=False) if mcol else df
+        for _, r in view.iterrows():
             if len(out) >= n:
                 break
-            code = str(r[ccol]).strip()
-            if code.startswith('KR') and len(code) >= 9:
-                code = code[3:9]
-            if not code.isdigit():
+            code = _normalize_kr_code(r[ccol])
+            if not is_kr_code(code):
                 continue
-            code = code.zfill(6)
             name = str(r[ncol]).strip()
-            if any(x in name for x in ['우B', '(우)', '스팩', '리츠', 'KODEX', 'TIGER', '인버스', '선물']):
+            if mkcol and 'KONEX' in str(r[mkcol]).upper():
                 continue
-            out[code] = {'name': name, 'theme': 'KRX 시가총액 상위', 'source_sector': (str(r[scol]).strip() if scol else ''), 'target_pct': 4.0, 'tech': '추세매매'}
+            if _is_preferred_or_special(code, name):
+                continue
+            sector = str(r[scol]).strip() if scol and pd.notna(r[scol]) else ''
+            out[code] = {'name': name, 'theme': 'KRX 시가총액 상위', 'source_sector': sector, 'target_pct': 4.0, 'tech': '추세매매'}
     except Exception:
         pass
     return out
 
 
 def fetch_popular(max_n=20):
+    return dict(_MARKET_CACHE.get_or_set(f'POPULAR:{int(max_n)}', lambda: _fetch_popular(max_n), accept=bool) or {})
+
+
+def _fetch_popular(max_n=20):
     out = {}
     try:
         res = requests.get('https://finance.naver.com/sise/lastsearch2.naver', headers={'User-Agent': 'Mozilla/5.0'}, timeout=8)
@@ -906,44 +1019,175 @@ def build_attention_signal(close, high20, rvol, trading_value_krw, recent5, bb_b
 
 
 def classify_news_quality(title: str):
-    """Headline-only risk/positive taxonomy. It never treats a headline as verified causation."""
-    t = str(title or '').lower()
+    """Headline-only taxonomy with phrase precedence.
+
+    It is intentionally conservative: a headline is *not* treated as verified causation.
+    Phrase rules run first so strings such as ``계약 해지`` are not accidentally scored
+    positive merely because they contain ``계약``.
+    """
+    t = re.sub(r'\s+', ' ', str(title or '').lower()).strip()
+    positive_phrases = {
+        '적자 축소': 3, '적자폭 축소': 3, '흑자 전환': 4, '사상 최대': 3,
+        '실적 개선': 3, '매출 증가': 2, '영업이익 증가': 3, '가이던스 상향': 4,
+        'guidance raised': 4, 'raises guidance': 4, 'earnings beat': 3, 'beats estimates': 3,
+        '수주 확대': 3, '신규 수주': 3, '공급 계약': 3, '기술 수출': 4,
+    }
+    risky_phrases = {
+        '계약 해지': -5, '계약 취소': -5, '수주 취소': -5, '공급 중단': -4,
+        '승인 실패': -5, '임상 실패': -5, '상장 폐지': -6, '상장폐지': -6,
+        '감사의견 거절': -6, '의견거절': -6, '실적 쇼크': -4, '가이던스 하향': -4,
+        'guidance cut': -4, 'cuts guidance': -4, 'offering priced': -3,
+    }
     positive = {
-        '수주': 3, '계약': 3, '공급': 2, '승인': 3, 'fda': 3, '흑자': 3, '증익': 2,
-        '실적 개선': 3, '매출 증가': 2, '파트너십': 2, 'partnership': 2, 'contract': 3,
-        'order': 2, 'approval': 3, 'guidance raised': 3, 'beat': 2, 'launch': 1,
+        '수주': 3, '계약': 2, '공급': 2, '승인': 3, 'fda': 3, '흑자': 3, '증익': 2,
+        '파트너십': 2, 'partnership': 2, 'contract': 2, 'order': 2, 'approval': 3,
+        'beat': 2, 'launch': 1,
     }
     risky = {
         '유상증자': -4, '증자': -2, 'cb': -3, '전환사채': -3, '소송': -3, '회계': -3,
-        '감사의견': -4, '상장폐지': -5, '횡령': -5, '배임': -5, '리콜': -3, '적자': -3,
+        '감사의견': -4, '횡령': -5, '배임': -5, '리콜': -3, '적자': -3,
         '하향': -2, 'downgrade': -2, 'offering': -3, 'dilution': -4, 'lawsuit': -3,
-        'investigation': -3, 'miss': -2, 'guidance cut': -4, 'recall': -3,
+        'investigation': -3, 'miss': -2, 'recall': -3,
     }
     score = 0
     tags = []
-    for k, v in positive.items():
+    consumed = t
+    for k, v in positive_phrases.items():
         if k in t:
+            score += v; tags.append(f'긍정:{k}'); consumed = consumed.replace(k, ' ')
+    for k, v in risky_phrases.items():
+        if k in t:
+            score += v; tags.append(f'주의:{k}'); consumed = consumed.replace(k, ' ')
+    def hit_keyword(text, key):
+        # English short tokens such as 'order'/'cb' use word boundaries to avoid
+        # accidental hits inside unrelated words (e.g. border, cboe). Korean terms
+        # are intentionally substring-matched because particles/endings can follow them.
+        if re.fullmatch(r'[a-z0-9 ]+', key):
+            return bool(re.search(r'(?<![a-z0-9])' + re.escape(key) + r'(?![a-z0-9])', text))
+        return key in text
+    for k, v in positive.items():
+        if hit_keyword(consumed, k):
             score += v; tags.append(f'긍정:{k}')
     for k, v in risky.items():
-        if k in t:
+        if hit_keyword(consumed, k):
             score += v; tags.append(f'주의:{k}')
+    score = int(max(-10, min(10, score)))
     if score >= 4: label = '🟢 긍정 이슈 우세'
     elif score <= -4: label = '🔴 위험 이슈 주의'
     elif score > 0: label = '🟡 긍정 키워드 일부'
     elif score < 0: label = '🟠 위험 키워드 일부'
     else: label = '⚪ 중립/분류 어려움'
-    return score, label, tags[:4]
+    return score, label, tags[:5]
+
+
+def _walk_dicts(obj):
+    if isinstance(obj, dict):
+        yield obj
+        for v in obj.values():
+            yield from _walk_dicts(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _walk_dicts(v)
+
+
+def _naver_kr_news(code, limit=6):
+    """Korean headlines from Naver's mobile stock-news API (Yahoo rarely carries KR news)."""
+    import html as _html
+    code = _normalize_kr_code(code)
+    r = requests.get(f'https://m.stock.naver.com/api/news/stock/{code}', params={'pageSize': max(limit * 2, 10), 'page': 1},
+                     headers={'User-Agent': 'Mozilla/5.0', 'Referer': f'https://m.stock.naver.com/domestic/stock/{code}/news'}, timeout=3)
+    r.raise_for_status()
+    out, seen = [], set()
+    for d in _walk_dicts(r.json()):
+        title = d.get('title') or d.get('tit')
+        if not isinstance(title, str) or not (d.get('articleId') or d.get('officeName') or d.get('officeId')):
+            continue
+        title = _html.unescape(re.sub(r'<[^>]+>', '', title)).strip()
+        if not title or title in seen:
+            continue
+        seen.add(title)
+        office, article = d.get('officeId'), d.get('articleId')
+        link = f'https://n.news.naver.com/mnews/article/{office}/{article}' if office and article else None
+        out.append({'title': title, 'publisher': str(d.get('officeName') or 'Naver 금융'), 'link': link,
+                    'published': d.get('datetime') or d.get('dt')})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _published_age_hours(value):
+    if value in (None, ''):
+        return None
+    try:
+        if isinstance(value, (int, float)) or (isinstance(value, str) and value.isdigit()):
+            num = float(value)
+            # Provider timestamps are usually seconds, but accept millisecond epochs too.
+            ts = pd.to_datetime(num, unit=('ms' if abs(num) >= 100_000_000_000 else 's'), utc=True)
+        else:
+            ts = pd.to_datetime(value, utc=True, errors='coerce')
+        if pd.isna(ts):
+            return None
+        return max(0.0, float((pd.Timestamp.now(tz='UTC') - ts).total_seconds() / 3600.0))
+    except Exception:
+        return None
+
+
+def _summarize_news(items, symbol, source):
+    total_score = 0.0; raw_score = 0; pos_count = risk_count = 0
+    recent24 = recent72 = 0; ages = []
+    clean = []
+    seen = set()
+    for it in items:
+        title = str(it.get('title') or '').strip()
+        if not title or title in seen:
+            continue
+        seen.add(title)
+        score, quality, tags = classify_news_quality(title)
+        age = _published_age_hours(it.get('published'))
+        if age is None: weight = 0.55
+        elif age <= 24: weight = 1.0; recent24 += 1; recent72 += 1; ages.append(age)
+        elif age <= 72: weight = 0.72; recent72 += 1; ages.append(age)
+        elif age <= 168: weight = 0.40; ages.append(age)
+        else: weight = 0.18; ages.append(age)
+        weighted = score * weight
+        row = dict(it)
+        row.update({'quality_score': score, 'quality_label': quality, 'tags': tags,
+                    'age_hours': None if age is None else round(age, 1),
+                    'recency_weight': round(weight, 2)})
+        clean.append(row)
+        raw_score += score; total_score += weighted
+        if score > 0: pos_count += 1
+        if score < 0: risk_count += 1
+    score_for_label = total_score
+    if score_for_label >= 4: overall = '🟢 최근 이슈 긍정 우세'
+    elif score_for_label <= -4: overall = '🔴 최근 이슈 위험 우세'
+    elif risk_count and pos_count: overall = '🟡 호재·악재 혼재'
+    elif pos_count: overall = '🟡 긍정 이슈 일부'
+    elif risk_count: overall = '🟠 위험 이슈 일부'
+    else: overall = '⚪ 중립 이슈'
+    latest_age = min(ages) if ages else None
+    return {'symbol': symbol, 'items': clean, 'count': len(clean), 'keyword_hits': pos_count + risk_count,
+            'positive_count': pos_count, 'risk_count': risk_count, 'news_score': raw_score,
+            'news_score_weighted': round(total_score, 2), 'news_label': overall, 'source': source,
+            'recent_24h_count': recent24, 'recent_72h_count': recent72,
+            'latest_age_hours': None if latest_age is None else round(latest_age, 1),
+            'error': None, 'note': '뉴스 제목 키워드와 게시시각으로 가중한 보조지표이며 기사 사실관계·주가 영향의 인과를 확정하지 않습니다.'}
 
 
 def fetch_recent_issues(code: str, market: str, limit: int = 6):
-    """Best-effort recent headlines from Yahoo Finance with headline-quality classification."""
+    """Best-effort recent headlines (KR: Naver first, then Yahoo) with headline-quality classification."""
     last_error = None
+    if str(market).upper() != 'US':
+        try:
+            items = _naver_kr_news(code, limit)
+            if items:
+                return _summarize_news(items, _normalize_kr_code(code), 'Naver 금융')
+        except Exception as e:
+            last_error = f'Naver: {e}'
     for symbol in _yahoo_symbol_candidates(code, market):
         try:
             raw = yf.Ticker(symbol).news or []
             items = []
-            total_score = 0
-            pos_count = risk_count = 0
             for n in raw[:max(limit*2, 10)]:
                 if not isinstance(n, dict):
                     continue
@@ -958,30 +1202,16 @@ def fetch_recent_issues(code: str, market: str, limit: int = 6):
                 published = c.get('pubDate') or c.get('displayTime') or n.get('providerPublishTime')
                 if not title:
                     continue
-                score, quality, tags = classify_news_quality(title)
-                total_score += score
-                if score > 0: pos_count += 1
-                if score < 0: risk_count += 1
-                items.append({'title': str(title), 'publisher': str(publisher), 'link': link, 'published': published,
-                              'quality_score': score, 'quality_label': quality, 'tags': tags})
+                items.append({'title': str(title), 'publisher': str(publisher), 'link': link, 'published': published})
                 if len(items) >= limit:
                     break
             if items:
-                if total_score >= 5: overall = '🟢 최근 이슈 긍정 우세'
-                elif total_score <= -5: overall = '🔴 최근 이슈 위험 우세'
-                elif risk_count and pos_count: overall = '🟡 호재·악재 혼재'
-                elif pos_count: overall = '🟡 긍정 이슈 일부'
-                elif risk_count: overall = '🟠 위험 이슈 일부'
-                else: overall = '⚪ 중립 이슈'
-                return {'symbol': symbol, 'items': items, 'count': len(items), 'keyword_hits': pos_count+risk_count,
-                        'positive_count': pos_count, 'risk_count': risk_count, 'news_score': total_score,
-                        'news_label': overall, 'source': 'Yahoo Finance', 'error': None,
-                        'note': '제목 키워드 분류이며 기사 사실관계·영향을 확정하지 않습니다.'}
+                return _summarize_news(items, symbol, 'Yahoo Finance')
         except Exception as e:
             last_error = str(e)
     return {'symbol': code, 'items': [], 'count': 0, 'keyword_hits': 0, 'positive_count':0, 'risk_count':0,
-            'news_score':0, 'news_label':'최근 이슈 데이터 없음', 'source': 'Yahoo Finance',
-            'note':'제목 기반 분류', 'error': ('최근 이슈 데이터 없음' + (f': {last_error[:100]}' if last_error else ''))}
+            'news_score':0, 'news_score_weighted':0, 'news_label':'최근 이슈 데이터 없음', 'source': 'Yahoo Finance',
+            'recent_24h_count':0, 'recent_72h_count':0, 'latest_age_hours':None, 'note':'제목 기반 분류', 'error': ('최근 이슈 데이터 없음' + (f': {last_error[:100]}' if last_error else ''))}
 
 def build_flow_proxy(df):
     """Price-volume accumulation proxy. This is NOT foreign/institutional investor flow."""
@@ -1103,11 +1333,14 @@ def build_backtest_proxy(df, market='KR'):
     # Monte Carlo sequence-risk audit (deterministic seed for reproducible validation).
     mc_p95_dd=mc_loss_prob=None; robustness=0.0
     if len(narr)>=8:
-        rng=np.random.default_rng(77); dds=[]; finals=[]
-        for _ in range(1000):
-            sim=rng.permutation(narr); eq=np.cumprod(1+sim/100.); pk=np.maximum.accumulate(eq)
-            dds.append(abs(float(((eq/pk-1)*100).min()))); finals.append(float(eq[-1]-1))
-        mc_p95_dd=float(np.percentile(dds,95)); mc_loss_prob=float(np.mean(np.asarray(finals)<0)*100)
+        # V78.11.0: bootstrap (resampling with replacement), vectorised.  The previous loop used
+        # permutations only, which can never change the final equity, so the "loss probability"
+        # was always exactly 0% or 100%.  Bootstrap varies both the order and the mix of trades.
+        rng=np.random.default_rng(77)
+        sims=narr[rng.integers(0,len(narr),size=(1000,len(narr)))]
+        eq=np.cumprod(1+sims/100.,axis=1); pk=np.maximum.accumulate(eq,axis=1)
+        dds=np.abs(((eq/pk-1)*100).min(axis=1))
+        mc_p95_dd=float(np.percentile(dds,95)); mc_loss_prob=float(np.mean(eq[:,-1]<1.0)*100)
         robustness=float(np.clip(100 - mc_p95_dd*2.2 - mc_loss_prob*.7 - (cal_gap or 25)*.6,0,100))
     # Exact forward-close audit at D+1/D+3/D+5 for the same historical signal dates.
     horizons={}
@@ -1129,7 +1362,7 @@ def build_backtest_proxy(df, market='KR'):
             'oos_profit_factor':None if oos_pf is None else round(min(oos_pf,9.99),2),'oos_max_drawdown_pct':None if oos_dd is None else round(oos_dd,2),
             'oos_brier':None if oos_brier is None else round(oos_brier,3),'walk_forward_label':wf,'walk_forward_folds':wf_folds,'wf_brier':None if oos_brier is None else round(oos_brier,3),'wf_calibration_gap_pct':None if cal_gap is None else round(cal_gap,1),'monte_carlo_p95_drawdown_pct':None if mc_p95_dd is None else round(mc_p95_dd,2),'monte_carlo_loss_probability_pct':None if mc_loss_prob is None else round(mc_loss_prob,1),'robustness_score':round(robustness,1),'horizon_returns':horizons,
             'regime_breakdown':rb,'cost_assumption_pct':cost,'first_signal_date':dates[0],'last_signal_date':dates[-1],'label':label,
-            'note':'V77 시점고정 검증. 수동 승률 제거, expanding-window Walk-Forward 확률검증, 1.5ATR 손절·2ATR 목표·최대 5거래일, 비용 차감, Monte Carlo 순서위험과 D+1/D+3/D+5 감사를 함께 사용합니다.'}
+            'note':'V77 시점고정 검증. 수동 승률 제거, expanding-window Walk-Forward 확률검증, 1.5ATR 손절·2ATR 목표·최대 5거래일, 비용 차감, 부트스트랩 Monte Carlo 순서·구성 위험과 D+1/D+3/D+5 감사를 함께 사용합니다.'}
 
 def assess_data_quality(df, market):
     """Score whether the OHLCV input is usable; this is a data-quality score, not investment confidence."""
@@ -1328,12 +1561,10 @@ def _session_volume_adjustment(df, market, raw_rvol):
             last_date = last.tz_convert(tz).date()
         else:
             last_date = last.date()
-        if last_date != now.date() or now.weekday() >= 5:
+        date_key = now.strftime('%Y-%m-%d')
+        if last_date != now.date() or now.weekday() >= 5 or market_calendar.is_holiday(market, date_key):
             return raw, 1.0
-        if market == 'US':
-            start_min, end_min = 9 * 60 + 30, 16 * 60
-        else:
-            start_min, end_min = 9 * 60, 15 * 60 + 30
+        start_min, end_min = market_calendar.regular_hours(market, date_key)
         cur = now.hour * 60 + now.minute + now.second / 60
         if cur < start_min or cur > end_min:
             return raw, 1.0
@@ -1494,27 +1725,61 @@ def build_held_action(held_price, held_qty, close_krw, momentum, rsi, grade, ma2
 
 
 def build_fundamental_outlook(out):
+    """Fundamental quality score based only on fields actually returned by the provider.
+
+    The score is deliberately sector-agnostic and therefore avoids treating a single absolute
+    PER cutoff as universally "cheap". Missing fields do not receive invented values; coverage
+    is reported separately so the UI can lower confidence when evidence is sparse.
+    """
     score = 50.0
     reasons = []
     rg, eg, om = out.get('revenue_growth'), out.get('earnings_growth'), out.get('operating_margin')
+    fcf, ocf = out.get('free_cashflow'), out.get('operating_cashflow')
+    de, cr = out.get('debt_to_equity'), out.get('current_ratio')
     pe = out.get('trailing_pe')
     if rg is not None:
-        if rg > 0.10: score += 12; reasons.append(f'매출 성장률 {rg*100:.1f}%')
-        elif rg < 0: score -= 10; reasons.append(f'매출 역성장 {rg*100:.1f}%')
+        if rg > 0.15: score += 12; reasons.append(f'매출 성장률 {rg*100:.1f}%')
+        elif rg > 0.05: score += 6; reasons.append(f'매출 성장률 {rg*100:.1f}%')
+        elif rg < -0.05: score -= 10; reasons.append(f'매출 역성장 {rg*100:.1f}%')
     if eg is not None:
-        if eg > 0.10: score += 12; reasons.append(f'이익 성장률 {eg*100:.1f}%')
-        elif eg < 0: score -= 12; reasons.append(f'이익 감소 {eg*100:.1f}%')
+        if eg > 0.15: score += 12; reasons.append(f'이익 성장률 {eg*100:.1f}%')
+        elif eg > 0.05: score += 6; reasons.append(f'이익 성장률 {eg*100:.1f}%')
+        elif eg < -0.05: score -= 12; reasons.append(f'이익 감소 {eg*100:.1f}%')
     if om is not None:
-        if om > 0.15: score += 10; reasons.append(f'영업이익률 {om*100:.1f}%')
-        elif om < 0: score -= 12; reasons.append('영업적자 구간')
-    if pe is not None:
-        if 0 < pe < 35: score += 5; reasons.append(f'PER {pe:.1f}')
-        elif pe > 80: score -= 5; reasons.append(f'고PER {pe:.1f}')
+        if om > 0.15: score += 8; reasons.append(f'영업이익률 {om*100:.1f}%')
+        elif om > 0.05: score += 3
+        elif om < 0: score -= 14; reasons.append('영업적자 구간')
+    if fcf is not None:
+        if fcf > 0: score += 6; reasons.append('잉여현금흐름 양호')
+        elif fcf < 0: score -= 6; reasons.append('잉여현금흐름 음수')
+    elif ocf is not None:
+        if ocf > 0: score += 4; reasons.append('영업현금흐름 양호')
+        elif ocf < 0: score -= 5; reasons.append('영업현금흐름 음수')
+    if de is not None:
+        # Yahoo debtToEquity is normally expressed as a percentage (100 ~= debt/equity 1.0x).
+        if de > 250: score -= 8; reasons.append(f'부채비율 지표 높음 {de:.0f}')
+        elif 0 <= de < 80: score += 3
+    if cr is not None:
+        if cr < 0.8: score -= 5; reasons.append(f'유동비율 지표 낮음 {cr:.2f}')
+        elif cr >= 1.5: score += 2
+    if pe is not None and pe > 100:
+        score -= 4; reasons.append(f'고PER {pe:.1f}')
+    coverage_keys = ('revenue','revenue_growth','net_income','earnings_growth','operating_margin',
+                     'trailing_pe','price_to_book','enterprise_to_ebitda','total_debt','total_cash',
+                     'operating_cashflow','free_cashflow','debt_to_equity','current_ratio')
+    coverage_count = sum(out.get(k) is not None for k in coverage_keys)
+    coverage_pct = round(coverage_count / len(coverage_keys) * 100, 1)
     score = max(0.0, min(100.0, score))
-    if score >= 70: label='🟢 실적 기반 장기 긍정'
-    elif score >= 52: label='🟡 실적 중립·확인 필요'
-    else: label='🔴 실적 기반 장기 주의'
-    return round(score,1), label, reasons[:4]
+    if coverage_count < 3:
+        label='⚪ 실적 데이터 부족'
+    elif score >= 70:
+        label='🟢 실적·재무 흐름 긍정'
+    elif score >= 50:
+        label='🟡 실적 중립·추가 확인'
+    else:
+        label='🔴 실적·재무 주의'
+    return round(score,1), label, reasons[:6], coverage_count, coverage_pct
+
 
 def fetch_fundamentals(code: str, market: str):
     """Best-effort fundamentals. Returns nulls instead of inventing values."""
@@ -1536,15 +1801,29 @@ def fetch_fundamentals(code: str, market: str):
                 'earnings_growth': num('earningsGrowth'),
                 'operating_margin': num('operatingMargins'),
                 'profit_margin': num('profitMargins'),
+                'gross_margin': num('grossMargins'),
                 'trailing_pe': num('trailingPE'),
                 'forward_pe': num('forwardPE'),
+                'price_to_book': num('priceToBook'),
+                'enterprise_to_ebitda': num('enterpriseToEbitda'),
                 'market_cap': num('marketCap'),
+                'enterprise_value': num('enterpriseValue'),
+                'total_debt': num('totalDebt'),
+                'total_cash': num('totalCash'),
+                'operating_cashflow': num('operatingCashflow'),
+                'free_cashflow': num('freeCashflow'),
+                'debt_to_equity': num('debtToEquity'),
+                'current_ratio': num('currentRatio'),
+                'quick_ratio': num('quickRatio'),
+                'return_on_equity': num('returnOnEquity'),
+                'beta': num('beta'),
+                'dividend_yield': num('dividendYield'),
                 'fifty_two_week_change': num('52WeekChange'),
                 'currency': info.get('currency'),
                 'earnings_timestamp': info.get('earningsTimestamp') or info.get('earningsTimestampStart'),
                 'source': 'Yahoo Finance',
             }
-            # If quoteSummary gives almost no useful fields, try quarterly income statement.
+            # If quoteSummary gives almost no useful fields, try the latest quarterly statement.
             if out['revenue'] is None and out['net_income'] is None:
                 try:
                     qf = t.quarterly_financials
@@ -1562,13 +1841,18 @@ def fetch_fundamentals(code: str, market: str):
                                     break
                 except Exception:
                     pass
-            if any(out.get(k) is not None for k in ('revenue','net_income','trailing_pe','market_cap','operating_margin')):
-                fs, fl, fr = build_fundamental_outlook(out)
+            useful = ('revenue','net_income','trailing_pe','market_cap','operating_margin','free_cashflow','total_debt')
+            if any(out.get(k) is not None for k in useful):
+                fs, fl, fr, coverage_count, coverage_pct = build_fundamental_outlook(out)
                 out['outlook_score'] = fs
                 out['outlook_label'] = fl
                 out['outlook_reasons'] = fr
-                out['quality_confirmed'] = bool(fs >= 70 and (out.get('operating_margin') is None or out.get('operating_margin') > 0) and (out.get('earnings_growth') is None or out.get('earnings_growth') >= 0))
-                out['quality_label'] = '💎 실적확인 우량' if out['quality_confirmed'] else '실적 확인상 우량 확정 아님'
+                out['coverage_count'] = coverage_count
+                out['coverage_pct'] = coverage_pct
+                out['quality_confirmed'] = bool(coverage_count >= 5 and fs >= 70 and
+                                                (out.get('operating_margin') is None or out.get('operating_margin') > 0) and
+                                                (out.get('free_cashflow') is None or out.get('free_cashflow') >= 0))
+                out['quality_label'] = '💎 실적·재무 확인 양호' if out['quality_confirmed'] else fl
                 ts=out.get('earnings_timestamp')
                 out['earnings_date']=None; out['earnings_risk']=None
                 if ts:
@@ -1586,15 +1870,25 @@ def fetch_fundamentals(code: str, market: str):
             continue
     return {
         'symbol': code, 'revenue': None, 'revenue_growth': None, 'net_income': None,
-        'earnings_growth': None, 'operating_margin': None, 'profit_margin': None,
-        'trailing_pe': None, 'forward_pe': None, 'market_cap': None,
+        'earnings_growth': None, 'operating_margin': None, 'profit_margin': None, 'gross_margin':None,
+        'trailing_pe': None, 'forward_pe': None, 'price_to_book':None, 'enterprise_to_ebitda':None,
+        'market_cap': None, 'enterprise_value':None, 'total_debt':None, 'total_cash':None,
+        'operating_cashflow':None, 'free_cashflow':None, 'debt_to_equity':None, 'current_ratio':None,
+        'quick_ratio':None, 'return_on_equity':None, 'beta':None, 'dividend_yield':None,
         'fifty_two_week_change': None, 'currency': None, 'source': 'Yahoo Finance',
-        'outlook_score': None, 'outlook_label': '실적 데이터 부족', 'outlook_reasons': [], 'quality_confirmed': False, 'quality_label':'실적 데이터 부족', 'earnings_timestamp':None, 'earnings_date':None, 'earnings_risk':None,
+        'outlook_score': None, 'outlook_label': '실적 데이터 부족', 'outlook_reasons': [],
+        'coverage_count':0, 'coverage_pct':0.0, 'quality_confirmed': False, 'quality_label':'실적 데이터 부족',
+        'earnings_timestamp':None, 'earnings_date':None, 'earnings_risk':None,
         'error': ('실적 데이터 수신 실패' + (f': {last_error[:100]}' if last_error else ''))
     }
 
 
 def diagnostic_market():
+    got = _MARKET_CACHE.get_or_set('DIAG', _diagnostic_market, accept=lambda r: r.get('kospi_chg') is not None)
+    return dict(got)
+
+
+def _diagnostic_market():
     result = {'kospi_chg': None, 'kosdaq_chg': None, 'kospi_5d': None, 'kosdaq_5d': None, 'sp500_5d': None, 'kr_state': '데이터 확인 중', 'us_state': '데이터 확인 중', 'state': '데이터 확인 중', 'guide': '지수 데이터 확인이 필요합니다.'}
     try:
         kp = fdr.DataReader('KS11').tail(10)
@@ -1638,6 +1932,30 @@ def diagnostic_market():
 
 
 def _load_price(code, market):
+    key = f'{market}:{str(code).upper()}'
+    df = _PRICE_CACHE.get_or_set(key, lambda: _load_price_uncached(code, market),
+                                 accept=lambda d: d is not None and not d.empty)
+    # Callers mutate (dropna / tail); hand out a copy so the cached frame stays pristine.
+    return df.copy() if df is not None else pd.DataFrame()
+
+
+def _clean_ohlcv(df):
+    if df is None or df.empty:
+        return pd.DataFrame()
+    if isinstance(df.columns, pd.MultiIndex):
+        df = df.copy(); df.columns = df.columns.droplevel(1)
+    rename = {}
+    for c in df.columns:
+        lc = str(c).lower()
+        if lc in ('open', 'high', 'low', 'close', 'volume'):
+            rename[c] = lc.capitalize()
+    if rename:
+        df = df.rename(columns=rename)
+    df = df[~df.index.duplicated(keep='last')].sort_index()
+    return df.tail(PRICE_HISTORY_ROWS)
+
+
+def _load_price_uncached(code, market):
     if market == 'US':
         # US search must be resilient on cloud hosts. Yahoo can occasionally
         # return an empty frame / rate-limit Render IPs, so try multiple
@@ -1651,10 +1969,9 @@ def _load_price(code, market):
         for ticker in yf_codes:
             try:
                 with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                    df = yf.download(ticker, period='6mo', interval='1d', progress=False, auto_adjust=False, threads=False)
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.droplevel(1)
-                if df is not None and not df.empty and 'Close' in df.columns and df['Close'].dropna().shape[0] >= 20:
+                    df = yf.download(ticker, period='2y', interval='1d', progress=False, auto_adjust=False, threads=False)
+                df = _clean_ohlcv(df)
+                if not df.empty and 'Close' in df.columns and df['Close'].dropna().shape[0] >= 20:
                     return df
             except Exception:
                 pass
@@ -1665,20 +1982,9 @@ def _load_price(code, market):
                 continue
             try:
                 with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                    df = fdr.DataReader(ticker)
-                if df is not None and not df.empty:
-                    df = df.tail(180)
-                    # Normalize common FDR column naming if needed.
-                    rename = {}
-                    for c in df.columns:
-                        lc = str(c).lower()
-                        if lc == 'close': rename[c] = 'Close'
-                        elif lc == 'open': rename[c] = 'Open'
-                        elif lc == 'high': rename[c] = 'High'
-                        elif lc == 'low': rename[c] = 'Low'
-                        elif lc == 'volume': rename[c] = 'Volume'
-                    if rename:
-                        df = df.rename(columns=rename)
+                    df = fdr.DataReader(ticker, (pd.Timestamp.now() - pd.Timedelta(days=int(PRICE_HISTORY_ROWS * 1.55))).strftime('%Y-%m-%d'))
+                df = _clean_ohlcv(df)
+                if not df.empty:
                     if 'Close' in df.columns and df['Close'].dropna().shape[0] >= 20:
                         return df
             except Exception:
@@ -1686,19 +1992,19 @@ def _load_price(code, market):
         return pd.DataFrame()
     # KR / KR_ETF
     try:
-        df = fdr.DataReader(code)
-        if df is not None and not df.empty:
-            return df.tail(180)
+        start = (pd.Timestamp.now() - pd.Timedelta(days=int(PRICE_HISTORY_ROWS * 1.55))).strftime('%Y-%m-%d')
+        df = _clean_ohlcv(fdr.DataReader(code, start))
+        if not df.empty:
+            return df
     except Exception:
         pass
     # fallback yfinance KS/KQ
     for suffix in ('.KS', '.KQ'):
         try:
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                df = yf.download(f'{code}{suffix}', period='6mo', progress=False, auto_adjust=False, threads=False)
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.droplevel(1)
-            if df is not None and not df.empty:
+                df = yf.download(f'{code}{suffix}', period='2y', progress=False, auto_adjust=False, threads=False)
+            df = _clean_ohlcv(df)
+            if not df.empty:
                 return df
         except Exception:
             pass
@@ -1855,6 +2161,16 @@ def analyze_one(code, info, market, settings, fx, market_state):
 
         held_price = _safe_float(info.get('my_price'), 0)
         held_qty = max(_safe_float(info.get('held_qty'), 0), 0)
+        holding_input_price_native = held_price if held_price > 0 else None
+        holding_input_currency = 'KRW' if held_price > 0 else None
+        if market == 'US' and held_price > 0:
+            # US average prices are entered in USD.  A value 20x above the current USD price is
+            # almost certainly a KRW figure typed by mistake, so it is used as KRW as-is.
+            if held_price >= close * 20:
+                holding_input_currency = 'KRW(자동판별)'
+            else:
+                held_price = held_price * fx
+                holding_input_currency = 'USD'
         held_pnl = None
         if held_price > 0:
             held_pnl = (close_krw / held_price - 1) * 100
@@ -2005,6 +2321,8 @@ def analyze_one(code, info, market, settings, fx, market_state):
             'held_price_krw': _safe_int(held_price) if held_price > 0 else None,
             'held_qty': held_qty if held_price > 0 else None,
             'held_pnl_pct': None if held_pnl is None else round(held_pnl, 2),
+            'holding_input_price_native': None if holding_input_price_native is None else round(holding_input_price_native, 4),
+            'holding_input_currency': holding_input_currency,
             'held_action': held_action,
             'outlook_score': outlook_score,
             'outlook_label': outlook_label,
@@ -2041,7 +2359,19 @@ def parse_held(text: str):
         qty = max(_safe_float(parts[2].replace('주',''), 0), 0) if len(parts) > 2 else 0
         if not key:
             continue
-        # Alphabetic ticker => US holding.
+        # KRX codes (incl. 2024+ alphanumeric codes such as 0091C0) must not be mistaken for US tickers.
+        if is_kr_code(key.upper()) or (key.isdigit() and len(key) <= 6):
+            code = key.upper().zfill(6) if key.isdigit() else key.upper()
+            name = reverse.get(code, code)
+            info = dict(KR_CURATED.get(code) or KR_ETFS.get(code) or {'name':name, 'theme':'보유/검색 종목', 'target_pct':4.0, 'tech':'추세매매'})
+            info.update({'name': info.get('name') or name, 'theme': info.get('theme') or '보유/검색 종목', 'my_price':price, 'held_qty':qty})
+            info = enrich_kr_info(code, info, allow_network=False)
+            market = 'ETF' if code in get_kr_etf_mapping() else 'KR'
+            result.append((code, info, market))
+            continue
+        # Alphabetic ticker => US holding.  The average price is the user's native USD input;
+        # analyze_one converts it with the live FX rate (the old code compared KRW price to a USD
+        # average and reported absurd +100,000% P&L for every US holding).
         if any(ch.isalpha() for ch in key) and key not in mapping:
             code = key.upper().replace(' ', '')
             info = dict(US_CURATED.get(code) or {'name': code, 'theme': '보유/검색 종목', 'target_pct': 4.0, 'tech': '추세매매'})
@@ -2049,9 +2379,7 @@ def parse_held(text: str):
             result.append((code, info, 'US'))
             continue
         code, name = '', ''
-        if key.isdigit():
-            code = key.zfill(6); name = reverse.get(code, code)
-        elif key in mapping:
+        if key in mapping:
             code, name = mapping[key], key
         if code:
             info = dict(KR_CURATED.get(code) or KR_ETFS.get(code) or {'name':name, 'theme':'보유/검색 종목', 'target_pct':4.0, 'tech':'추세매매'})
@@ -2248,7 +2576,8 @@ def analyze(settings: Dict[str, Any]):
     dedup = {}
     for c, i, m in tasks:
         key = (m, c)
-        if key not in dedup or '보유/검색' in i.get('theme', ''):
+        # Held rows (with an average price) always win over plain universe rows.
+        if key not in dedup or _safe_float(i.get('my_price'), 0) > 0 and _safe_float(dedup[key][1].get('my_price'), 0) <= 0:
             dedup[key] = (c, i, m)
     tasks = list(dedup.values())
 
@@ -2381,8 +2710,8 @@ def _resolve_search_query(query: str, market_hint: str = 'AUTO'):
         return code, {'name': name, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'tech': '추세매매'}, 'US'
 
     mapping = get_krx_mapping()
-    if q.isdigit():
-        code = q.zfill(6)
+    if q.isdigit() or is_kr_code(qu):
+        code = q.zfill(6) if q.isdigit() else qu
         name = get_current_kr_name(code, code)
         market = 'ETF' if code in get_kr_etf_mapping() else 'KR'
         info = dict(KR_ETFS.get(code) or KR_CURATED.get(code) or {'name': name, 'theme': '직접 검색 종목', 'target_pct': 4.0, 'tech': '추세매매'})
@@ -2567,15 +2896,11 @@ def analyze_search(query: str, settings: Dict[str, Any], market_hint: str = 'AUT
     search_held_qty = max(_safe_float(settings.get('search_held_qty'), 0), 0)
     if search_avg_price > 0:
         info = dict(info)
-        info['my_price'] = search_avg_price * fx if market == 'US' else search_avg_price
+        info['my_price'] = search_avg_price   # native input; analyze_one converts USD with the FX rate
         info['held_qty'] = search_held_qty
-        info['holding_input_currency'] = 'USD' if market == 'US' else 'KRW'
 
     market_info = diagnostic_market()
     item = analyze_one(code, info, market, settings, fx, market_info.get('us_state') if market == 'US' else market_info.get('kr_state', market_info.get('state')))
-    if item.get('ok') and search_avg_price > 0:
-        item['holding_input_price_native'] = round(search_avg_price, 4)
-        item['holding_input_currency'] = 'USD' if market == 'US' else 'KRW'
     if item.get('ok'):
         # A user-initiated lookup is always displayed as search analysis.  Risk/volatility
         # can still be shown, but the lookup itself must never be labelled a scalp strategy.

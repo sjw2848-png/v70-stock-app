@@ -6,17 +6,17 @@
   <meta name="theme-color" content="#07101e" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="V78.9.0 주식판" />
-  <title>V78.9.0 실전 검증 종목선별판</title>
+  <meta name="apple-mobile-web-app-title" content="V78.12.0 주식판" />
+  <title>V78.12.0 자동 종목리포트 통합판</title>
   <link rel="manifest" href="/static/manifest.json" />
   <link rel="icon" href="/static/icon-192.png" />
   <link rel="apple-touch-icon" href="/static/icon-192.png" />
-  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="stylesheet" href="/static/app.css?v={{ version }}" />
 </head>
 <body>
   <header class="topbar">
     <div class="brand-wrap">
-      <div class="eyebrow">V78.9.0 · 영구계정·자산복구·강세장 적응 통합판</div>
+      <div class="eyebrow">V78.12.0 · 급등주·V78후보·관심주 자동리포트 검증판</div>
       <h1>오늘 사도 돼?</h1>
       <p id="connectionText">열자마자 YES · WAIT · NO만 먼저 확인</p>
     </div>
@@ -70,6 +70,7 @@
         <label>시장<select id="surgeMarket"><option value="ALL">코스피+코스닥</option><option value="KOSPI">코스피</option><option value="KOSDAQ">코스닥</option></select></label>
         <label>최소 상승률 %<input id="surgeMinChange" type="number" value="5" min="0" max="29.99" step="1" /></label>
         <label>최소 거래대금(억)<input id="surgeMinTurnover" type="number" value="10" min="0" step="10" /></label>
+        <label class="surge-common-toggle"><input id="surgeCommonOnly" type="checkbox" checked /> 보통주 중심<br><small>ETF·ETN·스팩·우선주 제외</small></label>
         <button id="surgeRefreshBtn" class="primary" type="button">오늘 급등주 검색</button>
       </div>
       <div class="surge-manual">
@@ -79,7 +80,7 @@
       </div>
       <div id="surgeStatus" class="status compact">기준을 정한 뒤 ‘오늘 급등주 검색’을 누르세요.</div>
       <div id="surgeList" class="surge-list"></div>
-      <p class="quality-note">자동 목록은 네이버 금융 등락률 페이지를 탐색 원본으로 사용합니다. 장중 시세는 지연될 수 있으며 <b>급등 = 매수 추천</b>이 아닙니다. ‘분석’ 버튼을 누르면 기존 V78 분석 엔진으로 해당 종목을 다시 확인합니다.</p>
+      <p class="quality-note">자동 목록은 네이버 금융 등락률 페이지를 탐색 원본으로 사용합니다. 장중 시세는 지연될 수 있으며 기본값은 ETF·ETN·스팩·우선주를 제외합니다. <b>급등 = 매수 추천</b>이 아닙니다. ‘분석’ 버튼을 누르면 기존 V78 분석 엔진으로 해당 종목을 다시 확인합니다.</p>
     </section>
 
     <section class="live-search card" id="liveSearchSection">
@@ -99,8 +100,23 @@
       <div id="liveSearchResult" class="single-result"></div>
     </section>
 
+    <section class="auto-report card" id="autoReportSection">
+      <div class="section-title-row"><div><b>📑 오늘의 자동 종목 리포트</b><span>급등주 · V78 후보 · 관심종목을 모아 15개 관점, 데이터 완성도, 과열·진입거리 게이트까지 자동 점검합니다</span></div></div>
+      <div class="report-controls">
+        <button id="autoReportBtn" class="primary" type="button">오늘 리포트 자동 생성</button>
+        <label><input id="reportIncludeSurge" type="checkbox" checked /> 급등주 포함</label>
+        <label><input id="reportIncludeRecommend" type="checkbox" checked /> V78 후보 포함</label>
+        <label><input id="reportIncludeWatch" type="checkbox" checked /> 관심주 포함</label>
+        <select id="reportCount" aria-label="리포트 종목 수"><option value="4">핵심 4종목</option><option value="6" selected>핵심 6종목</option><option value="8">핵심 8종목</option></select>
+      </div>
+      <div id="autoReportStatus" class="status compact">최신 분석이나 급등주 검색을 실행하면 리포트도 자동으로 갱신됩니다. 바로 만들려면 ‘오늘 리포트 자동 생성’을 누르세요.</div>
+      <div id="autoReportSummary" class="report-summary"></div>
+      <div id="autoReportList" class="auto-report-list"></div>
+      <p class="quality-note">리포트는 기술지표·거래량·손익비·실적·최근 뉴스 제목을 결합한 <b>의사결정 보조정보</b>입니다. 검토점수는 수익확률이 아니며 근거 완성도를 별도로 표시합니다. 급등 자체를 매수 근거로 쓰지 않고, 결측값은 ‘확인 불가’로 남기며 주문은 자동 실행하지 않습니다.</p>
+    </section>
+
     <section class="prompt-center card" id="promptCenterSection">
-      <div class="section-title-row"><div><b>🧠 주식 분석 ChatGPT 프롬프트 15</b><span>사진의 15개 분석 항목을 앱 안에서 종목명·투자금에 맞춰 바로 복사할 수 있게 넣었습니다</span></div></div>
+      <div class="section-title-row"><div><b>🧠 주식 분석 ChatGPT 프롬프트 15</b><span>자동 리포트가 이 15개 관점을 내부적으로 반영합니다. 원문 질문이 필요할 때만 직접 복사해 사용하세요</span></div></div>
       <div class="prompt-tools">
         <input id="promptCompany" type="text" placeholder="기업명/종목명 (예: 삼성전자)" />
         <button id="promptUseSearchBtn" class="secondary" type="button">검색창 종목 가져오기</button>
@@ -116,7 +132,7 @@
       <div class="portfolio-add-grid">
         <label class="symbol-picker-label">종목명/코드<div class="symbol-picker"><input id="portfolioQuery" type="text" autocomplete="off" placeholder="예: KODEX 200, 삼성전자, NVDA" /><div id="portfolioSuggestions" class="symbol-suggestions" hidden></div></div><small>입력하면 비슷한 주식·ETF가 표시됩니다. 정확한 종목을 선택하세요.</small></label>
         <label>시장<select id="portfolioMarket"><option value="AUTO">자동</option><option value="KR">국내 주식</option><option value="ETF">국내 ETF</option><option value="US">미국</option></select></label>
-        <label>평단가<input id="portfolioAvg" type="number" min="0" step="any" placeholder="보유주만" /></label>
+        <label>평단가 <small>국내 원 / 미국 $</small><input id="portfolioAvg" type="number" min="0" step="any" placeholder="보유주만" /></label>
         <label>수량<input id="portfolioQty" type="number" min="0" step="any" placeholder="소수점 수량도 가능" /></label>
         <label>하루 모으기 금액<input id="portfolioDaily" type="number" min="0" step="100" placeholder="예: 1000원" /></label>
         <label>모으기 시작일<input id="portfolioAccumStart" type="date" /></label>
@@ -253,7 +269,7 @@
     </section>
 
     <section class="performance-section card" id="feedbackSection">
-      <div class="section-title-row"><div><b>🧠 V78.9.0 시장확산·적응형 후보·성과 피드백 엔진</b><span>D+5 실제 관찰결과를 전략·시장국면·추천유형별로 분해하고 추정확률의 보정오차를 확인합니다</span></div></div>
+      <div class="section-title-row"><div><b>🧠 V78.12.0 시장확산·적응형 후보·성과 피드백 엔진</b><span>D+5 실제 관찰결과를 전략·시장국면·추천유형별로 분해하고 추정확률의 보정오차를 확인합니다</span></div></div>
       <div id="feedbackEngine"><div class="quality-empty">D+5 완료 기록이 쌓이면 자동 분석합니다.</div></div>
       <p class="quality-note">※ 브라우저 로컬 기록 기반 감사 기능입니다. 미래 성과를 보장하거나 자동으로 공격성을 높이지 않습니다.</p>
     </section>
@@ -362,6 +378,6 @@
     </article>
   </template>
   <script>window.V709_CONFIG = { pinRequired: {{ 'true' if pin_required else 'false' }}, version: {{ version|tojson }} };</script>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v={{ version }}"></script>
 </body>
 </html>

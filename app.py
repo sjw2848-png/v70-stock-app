@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import secrets
 import atexit
 import json
@@ -13,10 +14,11 @@ from flask import Flask, jsonify, render_template, request, g
 import re
 import requests
 from lxml import html as lxml_html
-from state_store import StateStore
+from state_store import StateStore, StorageUnavailable
 from engine import analyze, analyze_search, search_instruments, fetch_fundamentals, fetch_recent_issues
+import market_calendar
 
-APP_VERSION = 'V78.9.0'
+APP_VERSION = 'V78.12.0'
 app = Flask(__name__)
 
 _cache_lock = threading.Lock()
@@ -25,13 +27,28 @@ _last_request_by_ip = {}
 _fund_cache = {}
 _issue_cache = {}
 _surge_cache = {}
+_search_cache = {}
+_extra_cache_lock = threading.Lock()
 CACHE_TTL = max(0, int(os.environ.get('CACHE_TTL_SECONDS', '120')))
+SEARCH_CACHE_TTL = max(0, int(os.environ.get('SEARCH_CACHE_TTL_SECONDS', '90')))
 MIN_REQUEST_GAP = max(0.0, float(os.environ.get('MIN_REQUEST_GAP_SECONDS', '2')))
 APP_PIN = os.environ.get('APP_PIN', '').strip()
 
 # Cross-device portfolio/watchlist sync. Point DATA_DIR at a persistent disk in production.
-DATA_DIR = os.environ.get('DATA_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data'))
-os.makedirs(DATA_DIR, exist_ok=True)
+_DEFAULT_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+DATA_DIR = os.environ.get('DATA_DIR', _DEFAULT_DATA_DIR)
+try:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    _probe = os.path.join(DATA_DIR, '.write_probe')
+    with open(_probe, 'w', encoding='utf-8') as _f:
+        _f.write('ok')
+    os.remove(_probe)
+except OSError:
+    # V78.12.0: render.yaml sets DATA_DIR=/var/data, but the free plan has no disk and the
+    # directory may not be writable.  Crashing at import would take the whole app down, so fall
+    # back to the app folder (PostgreSQL remains the durable store).
+    DATA_DIR = _DEFAULT_DATA_DIR
+    os.makedirs(DATA_DIR, exist_ok=True)
 PORTFOLIO_FILE = os.path.join(DATA_DIR, 'portfolio.json')
 PORTFOLIO_BACKUP_FILE = os.path.join(DATA_DIR, 'portfolio.backup.json')
 ACCOUNTS_FILE = os.path.join(DATA_DIR, 'accounts.json')
@@ -115,38 +132,83 @@ def _write_accounts(data):
 def _password_hash(password, salt_hex, iterations=180000):
     return hashlib.pbkdf2_hmac('sha256', str(password).encode('utf-8'), bytes.fromhex(salt_hex), iterations).hex()
 
+_login_failures = {}
+_LOGIN_WINDOW = 600
+_LOGIN_MAX_FAILURES = 8
+PASSWORD_ITERATIONS = 210000
+
+
+def _client_ip():
+    return str(request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown')).split(',')[0].strip()
+
+
+def _login_throttled(account_id):
+    key = (_client_ip(), account_id)
+    now = time.time()
+    hits = [t for t in _login_failures.get(key, []) if now - t < _LOGIN_WINDOW]
+    _login_failures[key] = hits
+    return len(hits) >= _LOGIN_MAX_FAILURES
+
+
+def _record_login_failure(account_id):
+    key = (_client_ip(), account_id)
+    now = time.time()
+    _login_failures.setdefault(key, []).append(now)
+    if len(_login_failures) > 2000:
+        for k in [k for k, v in _login_failures.items() if not v or now - v[-1] > _LOGIN_WINDOW]:
+            _login_failures.pop(k, None)
+
+
+def _owner_for(account_id):
+    return hashlib.sha256(('account:' + account_id).encode('utf-8')).hexdigest()[:32]
+
+
+def _cookie_session_account():
+    """Return the account id of a valid HttpOnly session cookie, or ''.
+
+    V78.11.0: the registry is only rewritten when expired sessions were actually pruned.
+    The old code wrote the whole account registry to PostgreSQL on *every* authenticated
+    request (each portfolio GET/PUT), which was slow and widened the race window.
+    """
+    cookie = str(request.cookies.get(ACCOUNT_COOKIE) or '')
+    if '.' not in cookie:
+        return ''
+    cookie_id, token = cookie.split('.', 1)
+    account_id = _normalize_account_id(cookie_id)
+    token_hash = _session_token_hash(token)
+    with _account_lock:
+        accounts = _read_accounts()
+        rec = accounts.get(account_id)
+        if not isinstance(rec, dict):
+            return ''
+        before = len(rec.get('sessions', []) or [])
+        pruned = _prune_sessions(dict(rec))
+        valid = any(hmac.compare_digest(str(x.get('token_hash')), token_hash) for x in pruned.get('sessions', []))
+        if len(pruned.get('sessions', [])) != before:
+            accounts[account_id] = pruned
+            _write_accounts(accounts)
+    return account_id if valid else ''
+
+
 def _account_auth():
-    # 1) Prefer a persistent HttpOnly cookie session. This keeps mobile/PWA login alive
-    # without storing the password in localStorage/sessionStorage.
     header_account_id = _normalize_account_id(request.headers.get('X-Account-ID'))
     header_password = str(request.headers.get('X-Account-Password') or '')
-    cookie = str(request.cookies.get(ACCOUNT_COOKIE) or '')
-    # Explicit credentials mean the user is deliberately connecting/switching accounts.
-    if not (header_account_id and header_password) and '.' in cookie:
-        cookie_id, token = cookie.split('.', 1)
-        account_id = _normalize_account_id(cookie_id)
-        token_hash = _session_token_hash(token)
-        with _account_lock:
-            accounts = _read_accounts()
-            rec = accounts.get(account_id)
-            if isinstance(rec, dict):
-                rec = _prune_sessions(dict(rec))
-                valid = any(str(x.get('token_hash')) == token_hash for x in rec.get('sessions', []))
-                accounts[account_id] = rec
-                _write_accounts(accounts)
-            else:
-                valid = False
-        if valid:
-            g.account_id = account_id
-            g.account_auth_via = 'cookie'
-            owner = hashlib.sha256(('account:' + account_id).encode('utf-8')).hexdigest()[:32]
-            return owner, None
+    # 1) Prefer the persistent HttpOnly cookie when it belongs to the requested account (or no
+    #    account was named).  Previously any password header bypassed the cookie, so every
+    #    request re-ran 180k PBKDF2 rounds.
+    cookie_account = _cookie_session_account()
+    if cookie_account and (not header_account_id or header_account_id == cookie_account):
+        g.account_id = cookie_account
+        g.account_auth_via = 'cookie'
+        return _owner_for(cookie_account), None
 
-    # 2) Fall back to explicit ID/password for first login or another device.
+    # 2) Explicit ID/password for first login, another device, or deliberate account switch.
     account_id = header_account_id
     password = header_password
     if not account_id or not password:
         return None, '개인 계정 연결이 필요합니다.'
+    if _login_throttled(account_id):
+        return None, '비밀번호 오류가 반복되어 10분간 로그인이 제한됩니다.'
     with _account_lock:
         accounts = _read_accounts()
         rec = accounts.get(account_id)
@@ -158,13 +220,15 @@ def _account_auth():
         actual = _password_hash(password, salt, int(rec.get('iterations') or 180000))
     except Exception:
         return None, '개인 계정 인증정보가 손상되었습니다.'
-    import hmac
     if not hmac.compare_digest(actual, expected):
+        _record_login_failure(account_id)
         return None, '개인 계정 비밀번호가 올바르지 않습니다.'
+    # A valid login resets this IP/account failure bucket instead of carrying old failures
+    # forward until the full 10-minute window expires.
+    _login_failures.pop((_client_ip(), account_id), None)
     g.account_id = account_id
     g.account_auth_via = 'password'
-    owner = hashlib.sha256(('account:' + account_id).encode('utf-8')).hexdigest()[:32]
-    return owner, None
+    return _owner_for(account_id), None
 
 def _portfolio_owner_legacy():
     # V78.5 이하의 기존 동기화 공간. 신규 개인계정으로 이관할 때만 사용합니다.
@@ -193,74 +257,14 @@ def _portfolio_digest(rows):
     return hashlib.sha256(payload.encode('utf-8')).hexdigest()[:20]
 
 
-# Market clocks are calculated on the server with explicit time zones.
-# This avoids Render's UTC clock (or a browser/PWA clock quirk) being mistaken for KRX time.
-KR_HOLIDAYS_2026 = {
-    '2026-01-01','2026-02-16','2026-02-17','2026-02-18','2026-03-02',
-    '2026-05-05','2026-05-25','2026-06-03','2026-08-17',
-    '2026-09-24','2026-09-25','2026-10-05','2026-10-09','2026-12-25'
-}
-US_HOLIDAYS_2026 = {
-    '2026-01-01','2026-01-19','2026-02-16','2026-04-03','2026-05-25',
-    '2026-06-19','2026-07-03','2026-09-07','2026-11-26','2026-12-25'
-}
-
+# Market clocks are calculated on the server with explicit time zones (see market_calendar.py).
 def _market_session(market):
-    """Return market phase with regular-session truth kept separate from extended-hours availability.
+    return market_calendar.market_session(market)
 
-    `open` intentionally means *regular session open* so recommendation logic never upgrades an
-    extended-hours observation into an immediate-buy signal.
-    """
-    market = 'US' if str(market).upper() == 'US' else 'KR'
-    tz = ZoneInfo('America/New_York') if market == 'US' else ZoneInfo('Asia/Seoul')
-    now = datetime.now(tz)
-    date_key = now.strftime('%Y-%m-%d')
-    weekend = now.weekday() >= 5
-    holiday = date_key in (US_HOLIDAYS_2026 if market == 'US' else KR_HOLIDAYS_2026)
-    mins = now.hour * 60 + now.minute
-    state = 'closed'; label = '장 마감'; regular_open = False; extended_open = False
-
-    if weekend or holiday:
-        state = 'closed'; label = '주말 휴장' if weekend else '공휴일 휴장'
-    elif market == 'KR':
-        # KRX: opening-auction order receipt 08:30~09:00, regular 09:00~15:30,
-        # post-market sessions begin again at 15:40 and continue to 18:00.
-        if mins < 8 * 60 + 30:
-            state = 'pre_wait'; label = '개장 전'
-        elif mins < 9 * 60:
-            state = 'preopen'; label = '시가 동시호가'
-        elif mins < 15 * 60 + 30:
-            state = 'regular'; label = '정규장 거래중'; regular_open = True
-        elif mins < 15 * 60 + 40:
-            state = 'post_wait'; label = '정규장 종료·시간외 대기'
-        elif mins < 18 * 60:
-            state = 'post'; label = '시간외 거래'; extended_open = True
-        else:
-            state = 'after'; label = '장 마감'
-    else:
-        # Nasdaq: pre-market 04:00~09:30 ET, regular 09:30~16:00 ET, after-hours 16:00~20:00 ET.
-        if mins < 4 * 60:
-            state = 'pre_wait'; label = '프리마켓 대기'
-        elif mins < 9 * 60 + 30:
-            state = 'premarket'; label = '프리마켓'; extended_open = True
-        elif mins < 16 * 60:
-            state = 'regular'; label = '정규장 거래중'; regular_open = True
-        elif mins < 20 * 60:
-            state = 'afterhours'; label = '애프터마켓'; extended_open = True
-        else:
-            state = 'after'; label = '장 마감'
-
-    return {
-        'market': market, 'open': regular_open, 'regular_open': regular_open,
-        'extended_open': extended_open, 'tradable': regular_open or extended_open,
-        'state': state, 'label': label, 'date': date_key,
-        'local_time': now.strftime('%H:%M'),
-        'timezone': 'America/New_York' if market == 'US' else 'Asia/Seoul',
-        'policy': 'regular_session_only_for_immediate_signal'
-    }
 
 def _market_sessions():
-    return {'KR': _market_session('KR'), 'US': _market_session('US')}
+    return market_calendar.market_sessions()
+
 
 PID_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.v76.pid')
 
@@ -287,7 +291,13 @@ def _authorized():
     if not APP_PIN:
         return True
     supplied = (request.headers.get('X-App-Pin') or '').strip()
-    return supplied == APP_PIN
+    return hmac.compare_digest(supplied.encode('utf-8'), APP_PIN.encode('utf-8'))
+
+
+@app.errorhandler(StorageUnavailable)
+def _storage_unavailable(exc):
+    return jsonify({'ok': False, 'error': f'서버 저장소(DB)에 일시적으로 접근할 수 없습니다. 기기 자료는 보존됩니다. ({str(exc)[:120]})',
+                    'code': 'STORAGE_UNAVAILABLE', 'version': APP_VERSION}), 503
 
 
 @app.get('/')
@@ -304,6 +314,7 @@ def health():
         'pin_required': bool(APP_PIN),
         'cache_ttl_seconds': CACHE_TTL,
         'sessions': _market_sessions(),
+        'holidays': market_calendar.holiday_payload(),
         'storage': _storage_status(),
     })
 
@@ -335,17 +346,23 @@ def _validated_settings(payload):
     return out
 
 
+_inflight = {}
+
+
+def _cached_analysis(key):
+    if not CACHE_TTL:
+        return None
+    with _cache_lock:
+        cached = _cache.get(key)
+        if cached and time.time() - cached['ts'] <= CACHE_TTL:
+            return cached
+    return None
+
+
 @app.post('/api/analyze')
 def api_analyze():
     if not _authorized():
         return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.', 'code': 'PIN_REQUIRED'}), 401
-
-    ip = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown').split(',')[0].strip()
-    now = time.time()
-    previous = _last_request_by_ip.get(ip, 0.0)
-    if MIN_REQUEST_GAP and now - previous < MIN_REQUEST_GAP:
-        return jsonify({'ok': False, 'error': '분석 버튼을 너무 빠르게 연속 실행했습니다. 잠시 후 다시 눌러주세요.'}), 429
-    _last_request_by_ip[ip] = now
 
     payload = request.get_json(silent=True) or {}
     try:
@@ -354,40 +371,54 @@ def api_analyze():
         return jsonify({'ok': False, 'error': str(e), 'code': 'INVALID_SETTINGS'}), 400
     key = _payload_hash(settings)
 
-    if CACHE_TTL:
-        with _cache_lock:
-            cached = _cache.get(key)
-            if cached and now - cached['ts'] <= CACHE_TTL:
-                return jsonify({
-                    'ok': True,
-                    **cached['data'],
-                    'cache_hit': True,
-                    'generated_at': cached['generated_at'],
-                    'version': APP_VERSION,
-                    'sessions': _market_sessions(),
-                })
+    def cached_response(cached):
+        return jsonify({'ok': True, **cached['data'], 'cache_hit': True, 'generated_at': cached['generated_at'],
+                        'version': APP_VERSION, 'sessions': _market_sessions()})
+
+    # V78.12.0: serve cache before rate limiting (cheap), and coalesce identical in-flight
+    # requests (startup analysis + auto report) into one computation.
+    cached = _cached_analysis(key)
+    if cached:
+        return cached_response(cached)
+    with _cache_lock:
+        event = _inflight.get(key)
+        owner = event is None
+        if owner:
+            event = threading.Event()
+            _inflight[key] = event
+    if not owner:
+        event.wait(timeout=170)
+        cached = _cached_analysis(key)
+        if cached:
+            return cached_response(cached)
+        return jsonify({'ok': False, 'error': '동일 분석이 진행 중입니다. 잠시 후 다시 시도하세요.', 'version': APP_VERSION}), 503
 
     try:
+        ip = _client_ip()
+        now = time.time()
+        previous = _last_request_by_ip.get(ip, 0.0)
+        if MIN_REQUEST_GAP and now - previous < MIN_REQUEST_GAP:
+            return jsonify({'ok': False, 'error': '분석 버튼을 너무 빠르게 연속 실행했습니다. 잠시 후 다시 눌러주세요.'}), 429
+        _last_request_by_ip[ip] = now
+        if len(_last_request_by_ip) > 500:
+            for k in [k for k, v in _last_request_by_ip.items() if now - v > 600]:
+                _last_request_by_ip.pop(k, None)
         data = analyze(settings)
         generated_at = _now_iso()
         if CACHE_TTL:
             with _cache_lock:
                 _cache[key] = {'ts': time.time(), 'data': data, 'generated_at': generated_at}
-                # Keep memory bounded on long-running services.
                 if len(_cache) > 20:
-                    oldest = sorted(_cache.items(), key=lambda kv: kv[1]['ts'])[:5]
-                    for old_key, _ in oldest:
+                    for old_key, _ in sorted(_cache.items(), key=lambda kv: kv[1]['ts'])[:5]:
                         _cache.pop(old_key, None)
-        return jsonify({
-            'ok': True,
-            **data,
-            'cache_hit': False,
-            'generated_at': generated_at,
-            'version': APP_VERSION,
-            'sessions': _market_sessions(),
-        })
+        return jsonify({'ok': True, **data, 'cache_hit': False, 'generated_at': generated_at,
+                        'version': APP_VERSION, 'sessions': _market_sessions()})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)[:300], 'version': APP_VERSION}), 500
+    finally:
+        with _cache_lock:
+            _inflight.pop(key, None)
+        event.set()
 
 
 @app.post('/api/search')
@@ -405,9 +436,26 @@ def api_search():
         settings = _validated_settings(payload)
     except ValueError as e:
         return jsonify({'ok': False, 'error': str(e), 'code': 'INVALID_SETTINGS'}), 400
+    cache_key = hashlib.sha256((query.upper() + '|' + market_hint + '|' + _payload_hash(settings)).encode('utf-8')).hexdigest()
+    now = time.time()
+    if SEARCH_CACHE_TTL:
+        with _cache_lock:
+            cached = _search_cache.get(cache_key)
+            if cached and now - cached['ts'] <= SEARCH_CACHE_TTL:
+                return jsonify({'ok': True, **cached['data'], 'cache_hit': True,
+                                'generated_at': cached['generated_at'], 'version': APP_VERSION,
+                                'sessions': _market_sessions()})
     try:
         data = analyze_search(query, settings, market_hint=market_hint)
-        return jsonify({'ok': True, **data, 'generated_at': _now_iso(), 'version': APP_VERSION, 'sessions': _market_sessions()})
+        generated_at = _now_iso()
+        if SEARCH_CACHE_TTL:
+            with _cache_lock:
+                _search_cache[cache_key] = {'ts': now, 'data': data, 'generated_at': generated_at}
+                if len(_search_cache) > 180:
+                    for k, _ in sorted(_search_cache.items(), key=lambda kv: kv[1]['ts'])[:40]:
+                        _search_cache.pop(k, None)
+        return jsonify({'ok': True, **data, 'cache_hit': False, 'generated_at': generated_at,
+                        'version': APP_VERSION, 'sessions': _market_sessions()})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)[:300], 'version': APP_VERSION}), 500
 
@@ -480,11 +528,30 @@ def _fetch_naver_risers(sosok: int, limit: int = 40):
     return out
 
 
+def _is_common_surge_candidate(name):
+    """Remove products/special-purpose names from the default surge discovery lane.
+
+    This is only a discovery filter, not a statement about investment quality. Users can turn it
+    off from the UI when they deliberately want preferred shares, SPACs, ETFs or ETNs included.
+    """
+    n = re.sub(r'\s+', '', str(name or '')).upper()
+    if not n:
+        return False
+    if any(tok in n for tok in ('ETF', 'ETN', '스팩', 'SPAC', '인버스', '레버리지')):
+        return False
+    if re.search(r'(?:\d?우(?:B|C)?|우)$', n):
+        return False
+    return True
+
+
 @app.get('/api/surge-stocks')
 def api_surge_stocks():
     if not _authorized():
         return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.', 'code': 'PIN_REQUIRED'}), 401
     market = str(request.args.get('market', 'ALL')).upper()
+    if market not in {'ALL','KOSPI','KOSDAQ'}:
+        market = 'ALL'
+    common_only = str(request.args.get('common_only', '1')).lower() not in {'0','false','no'}
     try:
         min_change = max(0.0, min(float(request.args.get('min_change', 5)), 29.99))
     except (TypeError, ValueError):
@@ -498,7 +565,7 @@ def api_surge_stocks():
     except (TypeError, ValueError):
         limit = 30
 
-    key = f'{market}:{min_change:.2f}:{min_turnover_eok:.2f}:{limit}'
+    key = f'{market}:{min_change:.2f}:{min_turnover_eok:.2f}:{limit}:{int(common_only)}'
     now = time.time()
     cached = _surge_cache.get(key)
     if cached and now - cached['ts'] < 45:
@@ -511,14 +578,28 @@ def api_surge_stocks():
         if market in {'ALL', 'KOSDAQ'}:
             raw.extend(_fetch_naver_risers(1, max(limit, 30)))
         min_turnover = min_turnover_eok * 100_000_000
-        items = [x for x in raw if float(x.get('change_pct') or 0) >= min_change and int(x.get('turnover_krw') or 0) >= min_turnover]
+        seen = set(); items = []
+        for x in raw:
+            code = str(x.get('code') or '')
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            if float(x.get('change_pct') or 0) < min_change or int(x.get('turnover_krw') or 0) < min_turnover:
+                continue
+            if common_only and not _is_common_surge_candidate(x.get('name')):
+                continue
+            row = dict(x)
+            row['discovery_only'] = True
+            items.append(row)
         items.sort(key=lambda x: (float(x.get('change_pct') or 0), int(x.get('turnover_krw') or 0)), reverse=True)
         items = items[:limit]
         payload = {
             'items': items,
             'generated_at': _now_iso(),
-            'filters': {'market': market, 'min_change_pct': min_change, 'min_turnover_eok': min_turnover_eok, 'limit': limit},
-            'source_note': '네이버 금융 등락률 페이지 기반. 장중 시세는 지연될 수 있으며, 자동매수 신호가 아니라 당일 급등 후보 탐색용입니다.'
+            'market_session': _market_session('KR'),
+            'filters': {'market': market, 'min_change_pct': min_change, 'min_turnover_eok': min_turnover_eok, 'limit': limit,
+                        'common_only': common_only},
+            'source_note': '네이버 금융 등락률 페이지 기반 탐색값입니다. 장중 시세는 지연될 수 있고, 장 마감·휴장 시 최근 거래일 값일 수 있으며 기술분석 가격과 시점이 다를 수 있습니다. 급등 자체는 자동매수 신호가 아닙니다.'
         }
         _surge_cache[key] = {'ts': now, 'data': payload}
         if len(_surge_cache) > 30:
@@ -555,7 +636,7 @@ def api_account_register():
         accounts = _read_accounts()
         if account_id in accounts:
             return jsonify({'ok': False, 'error': '이미 사용 중인 개인 계정 ID입니다.'}), 409
-        salt = os.urandom(16).hex(); iterations = 180000
+        salt = os.urandom(16).hex(); iterations = PASSWORD_ITERATIONS
         accounts[account_id] = {
             'salt': salt, 'iterations': iterations,
             'password_hash': _password_hash(password, salt, iterations),
@@ -572,12 +653,14 @@ def api_account_status():
         return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.'}), 401
     owner, error = _account_auth()
     if error:
-        code = 'ACCOUNT_NOT_FOUND' if '등록되지 않은' in error else ('ACCOUNT_BAD_PASSWORD' if '비밀번호' in error else 'ACCOUNT_REQUIRED')
+        code = ('ACCOUNT_NOT_FOUND' if '등록되지 않은' in error else
+                'ACCOUNT_THROTTLED' if '제한' in error else
+                'ACCOUNT_BAD_PASSWORD' if '비밀번호' in error else 'ACCOUNT_REQUIRED')
         orphaned_rows = 0
         if code == 'ACCOUNT_NOT_FOUND':
             aid = _normalize_account_id(request.headers.get('X-Account-ID'))
             if aid:
-                orphan_owner = hashlib.sha256(('account:' + aid).encode('utf-8')).hexdigest()[:32]
+                orphan_owner = _owner_for(aid)
                 with _portfolio_lock:
                     orphan_rec = _read_portfolio_store().get(orphan_owner, {})
                 orphan_rows = orphan_rec.get('rows', []) if isinstance(orphan_rec, dict) else []
@@ -612,7 +695,7 @@ def api_account_recover_local():
         return jsonify({'ok': False, 'error': 'ID 6자 이상, 비밀번호 8자 이상이 필요합니다.'}), 400
     if local_count < 1:
         return jsonify({'ok': False, 'error': '이 기기에 복구할 보유/관심종목 자료가 없습니다.', 'code': 'NO_LOCAL_RECOVERY_DATA'}), 400
-    owner = hashlib.sha256(('account:' + account_id).encode('utf-8')).hexdigest()[:32]
+    owner = _owner_for(account_id)
     with _account_lock:
         accounts = _read_accounts()
         if account_id in accounts:
@@ -623,7 +706,7 @@ def api_account_recover_local():
             existing_rows = existing.get('rows', []) if isinstance(existing, dict) else []
             if isinstance(existing_rows, list) and existing_rows:
                 return jsonify({'ok': False, 'error': '서버에는 기존 자산이 남아 있지만 계정 인증기록이 없습니다. 보안을 위해 자동 재등록하지 않습니다.', 'code': 'SERVER_DATA_ORPHANED'}), 409
-        salt = os.urandom(16).hex(); iterations = 210000
+        salt = os.urandom(16).hex(); iterations = PASSWORD_ITERATIONS
         accounts[account_id] = {
             'salt': salt, 'iterations': iterations,
             'password_hash': _password_hash(password, salt, iterations),
@@ -666,7 +749,7 @@ def api_account_change_id():
         return jsonify({'ok': False, 'error': '새 개인 계정 ID는 6자 이상이어야 합니다.'}), 400
     if new_id == old_id:
         return jsonify({'ok': True, 'account_id': old_id, 'version': APP_VERSION})
-    new_owner = hashlib.sha256(('account:' + new_id).encode('utf-8')).hexdigest()[:32]
+    new_owner = _owner_for(new_id)
     # Account record and portfolio ownership are moved together. If the portfolio write fails, roll back the account file.
     with _account_lock:
         accounts = _read_accounts()
@@ -715,7 +798,7 @@ def api_account_change_password():
         rec = accounts.get(account_id)
         if not isinstance(rec, dict):
             return jsonify({'ok': False, 'error': '현재 개인 계정을 찾을 수 없습니다.'}), 404
-        salt = os.urandom(16).hex(); iterations = 210000
+        salt = os.urandom(16).hex(); iterations = PASSWORD_ITERATIONS
         rec = dict(rec)
         rec.update({'salt': salt, 'iterations': iterations, 'password_hash': _password_hash(new_password, salt, iterations), 'updated_at': _now_iso(), 'sessions': []})
         accounts[account_id] = rec
@@ -764,6 +847,42 @@ def api_portfolio_get():
                     'account_id': getattr(g, 'account_id', ''), 'auth_via': getattr(g, 'account_auth_via', ''),
                     'version': APP_VERSION})
 
+def _num(value, default=0.0):
+    try:
+        v = float(value if value not in (None, '') else default)
+    except (TypeError, ValueError):
+        return float(default)
+    return max(0.0, v) if v == v and v not in (float('inf'), float('-inf')) else float(default)
+
+
+# Only the fields the portfolio/verdict UI reads are persisted.  The previous build stored the
+# full analysis object (backtest, split plan, notes ...) for every row inside one shared JSON
+# blob, so every save rewrote megabytes for all users.
+_LAST_ITEM_KEYS = {
+    'ok', 'code', 'name', 'market', 'category', 'sector', 'sector_major', 'source_sector', 'theme_tags',
+    'grade', 'decision', 'price_krw', 'price_native', 'currency', 'entry_krw', 'target1_krw', 'stop1_krw',
+    'qty', 'qty_capacity', 'rrr', 'momentum', 'rsi', 'opportunity_score', 'opportunity_eligible',
+    'adaptive_candidate', 'near_buy_candidate', 'allocation_wait', 'candidate_reason', 'buyable_rank',
+    'market_breadth_score', 'market_breadth_label', 'hard_block', 'risk_flags', 'held_action',
+    'held_price_krw', 'held_qty', 'held_pnl_pct', 'data_quality_score', 'buy_time', 'tech',
+    'holding_input_currency', 'holding_input_price_native',
+}
+
+
+def _slim_last(last):
+    if not isinstance(last, dict):
+        return None
+    item = last.get('item') if isinstance(last.get('item'), dict) else {}
+    slim = {k: item.get(k) for k in _LAST_ITEM_KEYS if k in item}
+    dq = item.get('data_quality')
+    if isinstance(dq, dict):
+        slim['data_quality'] = {'score': dq.get('score')}
+    bt = item.get('backtest')
+    if isinstance(bt, dict):
+        slim['backtest'] = {'validation_score': bt.get('validation_score'), 'max_drawdown_pct': bt.get('max_drawdown_pct')}
+    return {'item': slim, 'at': str(last.get('at') or '')[:40]}
+
+
 @app.put('/api/portfolio')
 def api_portfolio_put():
     if not _authorized():
@@ -785,10 +904,9 @@ def api_portfolio_put():
             continue
         market = str(row.get('market','AUTO')).upper()
         if market not in {'AUTO','KR','ETF','US'}: market='AUTO'
-        try:
-            avg=max(0.0,float(row.get('avg',0) or 0)); qty=max(0.0,float(row.get('qty',0) or 0)); daily=max(0.0,float(row.get('daily_amount',0) or 0))
-        except (TypeError,ValueError):
-            avg=qty=daily=0.0
+        avg = _num(row.get('avg')); qty = _num(row.get('qty')); daily = _num(row.get('daily_amount'))
+        horizon = max(1, min(120, int(_num(row.get('horizon_months'), 24) or 24)))
+        target_amount = _num(row.get('target_amount'))
         clean.append({'id': str(row.get('id',''))[:180] or f'{typ}|{market}|{query.upper()}',
                       'type':typ,'query':query,'market':market,
                       'avg':avg if typ=='held' else 0,'qty':qty if typ=='held' else 0,
@@ -801,10 +919,10 @@ def api_portfolio_put():
                       'accumulate':bool(row.get('accumulate',False)) if typ=='held' else False,
                       'daily_amount':daily if typ=='held' else 0,
                       'accum_start':str(row.get('accum_start','')).strip()[:10] if typ=='held' else '',
-                      'horizon_months': max(1,min(120,int(float(row.get('horizon_months',24) or 24)))) if typ=='held' else 0,
-                      'target_amount': max(0.0,float(row.get('target_amount',0) or 0)) if typ=='held' else 0,
+                      'horizon_months': horizon if typ=='held' else 0,
+                      'target_amount': target_amount if typ=='held' else 0,
                       'added_at':str(row.get('added_at') or _now_iso())[:40],
-                      'last':row.get('last') if isinstance(row.get('last'),dict) else None})
+                      'last':_slim_last(row.get('last'))})
     updated=_now_iso(); checksum=_portfolio_digest(clean)
     try:
         with _portfolio_lock:
@@ -844,6 +962,35 @@ def api_portfolio_legacy_get():
     rows = record.get('rows', []) if isinstance(record, dict) else []
     return jsonify({'ok': True, 'rows': rows if isinstance(rows, list) else [], 'version': APP_VERSION})
 
+
+def _cached_extra(cache, key, ttl, loader, max_items):
+    """Small provider cache. Provider failures are never kept for the full success TTL."""
+    now = time.time()
+    with _extra_cache_lock:
+        cached = cache.get(key)
+        if cached and now - cached['ts'] < cached.get('ttl', ttl):
+            return cached['data'], True
+    data = loader()
+    # Best-effort provider helpers may return an error field instead of raising. A transient
+    # outage should therefore expire quickly rather than poisoning a report for 15-30 minutes.
+    effective_ttl = min(ttl, 60) if isinstance(data, dict) and data.get('error') else ttl
+    with _extra_cache_lock:
+        cache[key] = {'ts': time.time(), 'ttl': effective_ttl, 'data': data}
+        if len(cache) > max_items:
+            for k, _ in sorted(cache.items(), key=lambda kv: kv[1]['ts'])[:max(10, max_items // 4)]:
+                cache.pop(k, None)
+    return data, False
+
+
+def _fundamental_data(code, market):
+    key = f'{market}:{code}'
+    return _cached_extra(_fund_cache, key, 1800, lambda: fetch_fundamentals(code, market), 80)
+
+
+def _issue_data(code, market):
+    key = f'{market}:{code}'
+    return _cached_extra(_issue_cache, key, 900, lambda: fetch_recent_issues(code, market), 160)
+
 @app.post('/api/fundamentals')
 def api_fundamentals():
     if not _authorized():
@@ -853,19 +1000,9 @@ def api_fundamentals():
     market = str(payload.get('market', 'KR')).strip().upper()
     if not code:
         return jsonify({'ok': False, 'error': '종목코드가 없습니다.'}), 400
-    key = f'{market}:{code}'
-    now = time.time()
-    cached = _fund_cache.get(key)
-    if cached and now - cached['ts'] < 1800:
-        return jsonify({'ok': True, 'data': cached['data'], 'cache_hit': True, 'version': APP_VERSION})
     try:
-        data = fetch_fundamentals(code, market)
-        _fund_cache[key] = {'ts': now, 'data': data}
-        if len(_fund_cache) > 60:
-            oldest = sorted(_fund_cache.items(), key=lambda kv: kv[1]['ts'])[:10]
-            for k, _ in oldest:
-                _fund_cache.pop(k, None)
-        return jsonify({'ok': True, 'data': data, 'cache_hit': False, 'version': APP_VERSION})
+        data, hit = _fundamental_data(code, market)
+        return jsonify({'ok': True, 'data': data, 'cache_hit': hit, 'version': APP_VERSION})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)[:300], 'version': APP_VERSION}), 500
 
@@ -879,17 +1016,43 @@ def api_issues():
     market = str(payload.get('market', 'KR')).strip().upper()
     if not code:
         return jsonify({'ok': False, 'error': '종목코드가 없습니다.'}), 400
-    key = f'{market}:{code}'
-    now = time.time()
-    cached = _issue_cache.get(key)
-    if cached and now - cached['ts'] < 900:
-        return jsonify({'ok': True, 'data': cached['data'], 'cache_hit': True, 'version': APP_VERSION})
     try:
-        data = fetch_recent_issues(code, market)
-        _issue_cache[key] = {'ts': now, 'data': data}
-        return jsonify({'ok': True, 'data': data, 'cache_hit': False, 'version': APP_VERSION})
+        data, hit = _issue_data(code, market)
+        return jsonify({'ok': True, 'data': data, 'cache_hit': hit, 'version': APP_VERSION})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)[:300], 'version': APP_VERSION}), 500
+
+
+@app.post('/api/report-data')
+def api_report_data():
+    """Return fundamentals + news in one browser round trip for the automatic report."""
+    if not _authorized():
+        return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.', 'code': 'PIN_REQUIRED'}), 401
+    payload = request.get_json(silent=True) or {}
+    code = str(payload.get('code', '')).strip().upper()
+    market = str(payload.get('market', 'KR')).strip().upper()
+    if not code:
+        return jsonify({'ok': False, 'error': '종목코드가 없습니다.'}), 400
+    result = {'fundamentals': {}, 'issues': {}, 'errors': []}
+    hits = {'fundamentals': False, 'issues': False}
+    try:
+        # Provider calls are independent. Two short-lived threads reduce report latency while the
+        # provider cache prevents duplicate outbound calls on repeated report refreshes.
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+            ff = ex.submit(_fundamental_data, code, market)
+            fi = ex.submit(_issue_data, code, market)
+            try:
+                result['fundamentals'], hits['fundamentals'] = ff.result(timeout=25)
+            except Exception as exc:
+                result['errors'].append(f'실적: {str(exc)[:120]}')
+            try:
+                result['issues'], hits['issues'] = fi.result(timeout=25)
+            except Exception as exc:
+                result['errors'].append(f'뉴스: {str(exc)[:120]}')
+        return jsonify({'ok': True, **result, 'cache_hit': hits, 'version': APP_VERSION})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)[:300], **result, 'version': APP_VERSION}), 500
 
 
 def local_ip():
