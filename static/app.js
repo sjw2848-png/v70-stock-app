@@ -7,7 +7,7 @@ const ACCOUNT_SECRET_KEY='v78-account-secret';
 const ACCOUNT_ID_KEY='v78-account-id-v1';
 let allResults=[],activeFilter='ALL',installPrompt=null,showAll=false,currentSector='ALL',serverSessions=null;
 
-// V78.12.0: fallback calendar (server /health overrides it). Includes 5/1, 7/17 제헌절, 12/31 and 2027.
+// V78.12.1: fallback calendar (server /health overrides it). Includes 5/1, 7/17 제헌절, 12/31 and 2027.
 const KR_HOLIDAYS=new Set(['2026-01-01','2026-02-16','2026-02-17','2026-02-18','2026-03-02','2026-05-01','2026-05-05','2026-05-25','2026-06-03','2026-07-17','2026-08-17','2026-09-24','2026-09-25','2026-10-05','2026-10-09','2026-12-25','2026-12-31','2027-01-01','2027-02-08','2027-02-09','2027-03-01','2027-05-05','2027-05-13','2027-07-19','2027-08-16','2027-09-14','2027-09-15','2027-09-16','2027-10-04','2027-10-11','2027-12-27','2027-12-31']);
 const US_HOLIDAYS=new Set(['2026-01-01','2026-01-19','2026-02-16','2026-04-03','2026-05-25','2026-06-19','2026-07-03','2026-09-07','2026-11-26','2026-12-25','2027-01-01','2027-01-18','2027-02-15','2027-03-26','2027-05-31','2027-06-18','2027-07-05','2027-09-06','2027-11-25','2027-12-24']);
 const US_EARLY_CLOSE=new Set(['2026-11-27','2026-12-24','2027-11-26']);
@@ -254,7 +254,7 @@ installSymbolPicker('liveSearchInput','liveSearchSuggestions','liveSearchMarket'
 installSymbolPicker('portfolioQuery','portfolioSuggestions','portfolioMarket',x=>{$('portfolioStatus').textContent=`선택: ${x.name} (${x.code}) · ${x.type} · 이제 보유주/관심종목으로 저장할 수 있습니다.`});
 
 
-// V78.12.0: daily surge-stock radar feeding the automatic report engine.
+// V78.12.1: daily surge-stock radar feeding the automatic report engine.
 const SURGE_MANUAL_KEY='v78.9.0-surge-manual';
 let surgeAutoRows=[];
 function surgeManualLoad(){const x=loadJson(SURGE_MANUAL_KEY,[]);return Array.isArray(x)?x:[]}
@@ -283,30 +283,75 @@ async function addManualSurge(){
 $('surgeRefreshBtn')?.addEventListener('click',loadSurgeRadar);$('surgeCommonOnly')?.addEventListener('change',loadSurgeRadar);$('surgeManualAddBtn')?.addEventListener('click',addManualSurge);$('surgeManualInput')?.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();addManualSurge()}});$('surgeManualClearBtn')?.addEventListener('click',()=>{surgeManualSave([]);renderSurgeRadar();$('surgeStatus').textContent='직접 추가 목록을 비웠습니다.'});
 renderSurgeRadar();setTimeout(loadSurgeRadar,700);
 
-// V78.12.0: original 15-prompt library retained as a manual reference; auto report uses the same viewpoints.
+// V78.12.1: company prompt center is now an actionable 15-view report launcher.
 const STOCK_PROMPTS=[
- ['사업 이해하기',c=>`${c}이 어떤 사업으로 돈을 버는지 사업별 매출 비중과 핵심 수익원을 설명해줘.`],
- ['최근 실적 분석',c=>`${c}의 최근 실적을 정리하고 전년 대비 개선된 점과 아쉬운 점을 분석해줘.`],
- ['재무제표 점검',c=>`${c}의 재무제표에서 부채, 현금흐름, 이익률 등 주의할 위험신호를 체크리스트로 정리해줘.`],
- ['경쟁사와 비교',c=>`${c}와 [비교기업]을 성장률, 수익성, 밸류에이션, 시장점유율 기준으로 비교해줘.`],
- ['지금 주가 분석',c=>`${c}의 PER, PBR, EV/EBITDA 등을 과거 평균과 경쟁사와 비교해 현재 밸류에이션 수준을 분석해줘.`],
- ['성장 이유 찾기',c=>`${c}의 향후 3~5년 성장동력을 찾아주고, 각 요인이 실제 실적으로 이어질 조건을 알려줘.`],
- ['투자 리스크 점검',c=>`${c}에 투자하지 말아야 할 이유를 실적, 경쟁, 산업, 규제, 밸류에이션 관점에서 최대한 강하게 분석해줘.`],
- ['시나리오 분석',c=>`${c}의 향후 실적을 낙관·기준·비관 3가지 시나리오로 나눠주고, 각 시나리오가 성립할 조건을 알려줘.`],
+ ['사업 이해하기',c=>`${c}: 어떤 사업으로 돈을 버는지 사업별 매출 비중과 핵심 수익원을 설명해줘.`],
+ ['최근 실적 분석',c=>`${c}: 최근 실적을 정리하고 전년 대비 개선된 점과 아쉬운 점을 분석해줘.`],
+ ['재무제표 점검',c=>`${c}: 재무제표에서 부채, 현금흐름, 이익률 등 주의할 위험신호를 체크리스트로 정리해줘.`],
+ ['경쟁사와 비교',c=>`${c}: 주요 경쟁기업과 성장률, 수익성, 밸류에이션, 시장점유율 기준으로 비교해줘.`],
+ ['지금 주가 분석',c=>`${c}: PER, PBR, EV/EBITDA 등을 과거 평균과 경쟁사와 비교해 현재 밸류에이션 수준을 분석해줘.`],
+ ['성장 이유 찾기',c=>`${c}: 향후 3~5년 성장동력을 찾아주고, 각 요인이 실제 실적으로 이어질 조건을 알려줘.`],
+ ['투자 리스크 점검',c=>`${c}: 투자하지 말아야 할 이유를 실적, 경쟁, 산업, 규제, 밸류에이션 관점에서 최대한 강하게 분석해줘.`],
+ ['시나리오 분석',c=>`${c}: 향후 실적을 낙관·기준·비관 3가지 시나리오로 나누고, 각 시나리오가 성립할 조건을 알려줘.`],
  ['투자 비중 계산',c=>`내 투자자산은 ${fmt(Number($('budget')?.value||0))}원이고 ${c}에 ${fmt(Number($('tradeBudget')?.value||0))}원 투자하려 해. 한 종목 집중 시 위험과 손실 영향을 계산해줘.`],
- ['분할매수 계획',c=>`${c}에 총 ${fmt(Number($('tradeBudget')?.value||0))}원을 투자한다고 가정할 때, 가격 기준과 기간 기준으로 나눠 접근하는 방법을 각각 정리해줘.`],
- ['실적 발표 분석',c=>`${c}의 최신 실적 발표 내용을 바탕으로 매출, 이익, 가이던스에서 시장 기대와 달라진 점을 정리해줘.`],
- ['뉴스 영향 분석',c=>`[뉴스 내용]을 바탕으로 ${c}의 매출, 이익, 기업가치에 미치는 실제 영향과 단순한 시장 소음을 구분해줘.`],
- ['투자 논리 점검',c=>`내가 ${c}을 산 이유는 [내 투자논리]. 최근 실적과 사업 변화를 기준으로 투자 논리가 유지·강화·훼손됐는지 점검해줘.`],
- ['매도 기준 설정',c=>`${c}을 보유 중이야. 투자논리가 훼손됐다고 판단할 수 있는 조건을 실적, 사업, 재무, 경쟁력 기준으로 정리해줘.`],
- ['투자 복기하기',c=>`${c}을 [매수가]원에 매수해서 [매도가]원에 매도했어. 결과보다 의사결정 과정을 분석해 잘한 점, 아쉬운 점, 다음에 반복할 원칙 3가지를 정리해줘.`]
+ ['분할매수 계획',c=>`${c}: 총 ${fmt(Number($('tradeBudget')?.value||0))}원을 투자한다고 가정할 때 가격 기준과 기간 기준의 분할 접근법을 정리해줘.`],
+ ['실적 발표 분석',c=>`${c}: 최신 실적 발표 내용을 바탕으로 매출, 이익, 가이던스에서 시장 기대와 달라진 점을 정리해줘.`],
+ ['뉴스 영향 분석',c=>`${c}: 최근 핵심 뉴스를 바탕으로 매출, 이익, 기업가치에 미치는 실제 영향과 단순 시장 소음을 구분해줘.`],
+ ['투자 논리 점검',c=>`${c}: 현재 실적·사업 변화·가격 위치를 기준으로 투자 논리가 유지·강화·훼손되는 조건을 점검해줘.`],
+ ['매도 기준 설정',c=>`${c}: 투자논리가 훼손됐다고 판단할 수 있는 조건과 목표가·손절·시간 기준을 실적, 사업, 재무, 경쟁력 관점에서 정리해줘.`],
+ ['투자 복기하기',c=>`${c}: 매매 후 결과보다 의사결정 과정을 검토할 수 있도록 잘한 점, 아쉬운 점, 다음에 반복할 원칙 3가지를 정리해줘.`]
 ];
+const PROMPT_REPORT_KEY='v78-prompt-company-report-v1';
 function promptCompany(){return String($('promptCompany')?.value||'').trim()||'[기업명]'}
-function renderPromptCenter(){const box=$('promptGrid');if(!box)return;const c=promptCompany();box.innerHTML=STOCK_PROMPTS.map((p,i)=>`<article class="prompt-card"><h3><span class="prompt-num">${i+1}</span>${escapeText(p[0])}</h3><p>${escapeText(p[1](c))}</p><button type="button" class="secondary" data-prompt-copy="${i}">복사</button></article>`).join('');box.querySelectorAll('[data-prompt-copy]').forEach(b=>b.onclick=async()=>{const i=Number(b.dataset.promptCopy),txt=STOCK_PROMPTS[i][1](promptCompany());try{await navigator.clipboard.writeText(txt);$('promptStatus').textContent=`✅ ${i+1}. ${STOCK_PROMPTS[i][0]} 프롬프트를 복사했습니다.`}catch(e){$('promptStatus').textContent='클립보드 권한이 없어 자동 복사하지 못했습니다.'}})}
-$('promptCompany')?.addEventListener('input',renderPromptCenter);$('promptUseSearchBtn')?.addEventListener('click',()=>{const live=$('liveSearchInput').value.trim(),selected=$('liveSearchInput').dataset.selectedName||'';$('promptCompany').value=selected||live||'';renderPromptCenter();$('promptStatus').textContent=live||selected?'실시간 검색창의 종목을 반영했습니다.':'실시간 검색창이 비어 있습니다.'});$('promptCopyAllBtn')?.addEventListener('click',async()=>{const c=promptCompany(),txt=STOCK_PROMPTS.map((p,i)=>`${i+1}. ${p[0]}\n${p[1](c)}`).join('\n\n');try{await navigator.clipboard.writeText(txt);$('promptStatus').textContent='✅ 15개 프롬프트 전체를 복사했습니다.'}catch(e){$('promptStatus').textContent='클립보드 권한이 없어 전체 복사하지 못했습니다.'}});renderPromptCenter();
+function promptSetSelected(x){
+ const el=$('promptSelected'),input=$('promptCompany');if(!el||!input)return;
+ if(!x){el.hidden=true;el.textContent='';return}
+ const market=(x.type==='ETF'&&x.market==='KR')?'ETF':String(x.market||$('promptMarket')?.value||'AUTO').toUpperCase();
+ input.dataset.selectedCode=String(x.code||'');input.dataset.selectedName=String(x.name||'');input.dataset.selectedType=String(x.type||'');input.dataset.selectedMarket=market;input.dataset.selectedExchange=String(x.exchange||'');
+ el.hidden=false;el.textContent=`선택됨 · ${x.name||x.code} (${x.code||'-'}) · ${market==='US'?'미국':market==='ETF'?'국내 ETF':market==='KR'?'국내':'시장 자동'}`;
+}
+function renderPromptCenter(){
+ const box=$('promptGrid');if(!box)return;const c=promptCompany();
+ box.innerHTML=STOCK_PROMPTS.map((p,i)=>`<article class="prompt-card"><h3><span class="prompt-num">${i+1}</span>${escapeText(p[0])}</h3><p>${escapeText(p[1](c))}</p><button type="button" class="secondary" data-prompt-copy="${i}">복사</button></article>`).join('');
+ box.querySelectorAll('[data-prompt-copy]').forEach(b=>b.onclick=async()=>{const i=Number(b.dataset.promptCopy),txt=STOCK_PROMPTS[i][1](promptCompany());try{await navigator.clipboard.writeText(txt);$('promptStatus').textContent=`✅ ${promptCompany()} · ${i+1}. ${STOCK_PROMPTS[i][0]} 문구를 복사했습니다.`}catch(e){$('promptStatus').textContent='클립보드 권한이 없어 자동 복사하지 못했습니다.'}})
+}
+function promptInputChanged(){
+ const input=$('promptCompany');if(!input)return;
+ ['selectedCode','selectedName','selectedType','selectedMarket','selectedExchange'].forEach(k=>delete input.dataset[k]);promptSetSelected(null);renderPromptCenter();
+ const c=input.value.trim();if(!c){$('promptStatus').textContent='기업명을 입력하면 아래 15개 질문이 즉시 바뀝니다. Enter를 누르면 자동 리포트를 생성합니다.';return}
+ $('promptStatus').textContent=`✍️ “${c}” 15개 관점 반영 완료 · 종목을 선택하거나 Enter를 누르면 자동 리포트를 생성합니다.`;
+}
+async function resolvePromptCompany(q){
+ const input=$('promptCompany'),market=$('promptMarket')?.value||'AUTO';
+ if(input?.dataset.selectedCode){return{code:input.dataset.selectedCode,name:input.dataset.selectedName||q,type:input.dataset.selectedType||'주식',market:input.dataset.selectedMarket||market,exchange:input.dataset.selectedExchange||''}}
+ const r=await fetch(`/api/symbols?q=${encodeURIComponent(q)}&market=${encodeURIComponent(market)}`,{headers:baseHeaders(),cache:'no-store'}),d=await r.json();
+ if(!r.ok||!d.ok)throw new Error(d.error||'기업 검색 실패');const items=Array.isArray(d.items)?d.items:[];if(!items.length)throw new Error('일치하는 종목을 찾지 못했습니다. 종목코드로 다시 검색해 보세요.');
+ const norm=v=>String(v||'').replace(/\s+/g,'').toUpperCase(),nq=norm(q);return items.find(x=>norm(x.code)===nq||norm(x.name)===nq)||items[0]
+}
+async function runPromptCompanyReport(){
+ const input=$('promptCompany'),q=String(input?.value||'').trim(),btn=$('promptAnalyzeBtn');if(!q){$('promptStatus').textContent='기업명 또는 종목코드를 먼저 입력하세요.';input?.focus();return null}
+ if(btn){btn.disabled=true;btn.textContent='기업 확인 중…'};$('promptStatus').textContent=`🔎 ${q} 종목을 확인하고 있습니다…`;const out=$('promptCompanyReport');if(out)out.innerHTML='<div class="quality-empty">15개 관점 자동 리포트를 생성 중입니다…</div>';
+ try{
+  const x=await resolvePromptCompany(q),market=(x.type==='ETF'&&x.market==='KR')?'ETF':String(x.market||$('promptMarket')?.value||'AUTO').toUpperCase();
+  input.value=x.name||q;if($('promptMarket')&&['AUTO','KR','US','ETF'].includes(market))$('promptMarket').value=market;promptSetSelected({...x,market});renderPromptCenter();
+  if(btn)btn.textContent='15관점 분석 중…';$('promptStatus').textContent=`📊 ${x.name||q} (${x.code||q}) · 가격·기술·실적·뉴스·리스크를 교차분석 중입니다…`;
+  const row=await reportBuildRow({query:x.code||q,market_hint:market,sources:['직접 분석'],meta:{manual_company:true,requested_query:q,resolved_name:x.name||'',resolved_code:x.code||'',resolved_market:market}});
+  saveJson(PROMPT_REPORT_KEY,{schema:1,generated_at:new Date().toISOString(),row});renderPromptCompanyReport(row);
+  $('promptStatus').textContent=`✅ ${row.item?.name||x.name||q} 15개 관점 자동 리포트 생성 완료 · 검토점수 ${row.score}점 · 근거 완성도 ${Number(row.assessment?.confidence||0)}% · ${dateLabel(new Date().toISOString())}`;
+  out?.scrollIntoView({behavior:'smooth',block:'nearest'});return row
+ }catch(e){if(out)out.innerHTML=`<div class="quality-empty">기업 자동 리포트를 만들지 못했습니다. ${escapeText(e.message)}</div>`;$('promptStatus').textContent=`기업 분석 오류: ${e.message}`;return null}
+ finally{if(btn){btn.disabled=false;btn.textContent='기업 자동 리포트 생성'}}
+}
+$('promptCompany')?.addEventListener('input',promptInputChanged);
+$('promptCompany')?.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();runPromptCompanyReport()}});
+$('promptMarket')?.addEventListener('change',()=>{const input=$('promptCompany');if(input){delete input.dataset.selectedCode;delete input.dataset.selectedName;delete input.dataset.selectedType;delete input.dataset.selectedMarket;delete input.dataset.selectedExchange}promptSetSelected(null);promptInputChanged()});
+$('promptAnalyzeBtn')?.addEventListener('click',runPromptCompanyReport);
+$('promptUseSearchBtn')?.addEventListener('click',()=>{const live=$('liveSearchInput'),q=String(live?.dataset.selectedName||live?.value||'').trim();$('promptCompany').value=q;if(live?.dataset.selectedCode){$('promptCompany').dataset.selectedCode=live.dataset.selectedCode;$('promptCompany').dataset.selectedName=live.dataset.selectedName||q;$('promptCompany').dataset.selectedType=live.dataset.selectedType||'';$('promptCompany').dataset.selectedMarket=$('liveSearchMarket')?.value||'AUTO';$('promptCompany').dataset.selectedExchange=live.dataset.selectedExchange||''}renderPromptCenter();$('promptStatus').textContent=q?`✅ 실시간 검색창의 “${q}”을(를) 반영했습니다. 자동 리포트를 생성합니다.`:'실시간 검색창이 비어 있습니다.';if(q)setTimeout(runPromptCompanyReport,80)});
+$('promptCopyAllBtn')?.addEventListener('click',async()=>{const c=promptCompany(),txt=STOCK_PROMPTS.map((p,i)=>`${i+1}. ${p[0]}\n${p[1](c)}`).join('\n\n');try{await navigator.clipboard.writeText(txt);$('promptStatus').textContent=`✅ ${c} · 15개 분석 문구 전체를 복사했습니다.`}catch(e){$('promptStatus').textContent='클립보드 권한이 없어 전체 복사하지 못했습니다.'}});
+renderPromptCenter();window.__promptCenterReady=true;
+installSymbolPicker('promptCompany','promptCompanySuggestions','promptMarket',x=>{const input=$('promptCompany');input.value=x.name||x.code;promptSetSelected({...x,market:(x.type==='ETF'&&x.market==='KR')?'ETF':x.market});renderPromptCenter();$('promptStatus').textContent=`✅ ${x.name} (${x.code}) 선택 · 자동 리포트를 생성합니다.`;setTimeout(runPromptCompanyReport,80)});
 
-
-// V78.12.0: automatic multi-source decision-support report.
+// V78.12.1: automatic multi-source decision-support report.
 // Scores rank evidence inside this app; they are not probabilities of profit or automatic buy signals.
 const AUTO_REPORT_KEY='v78-auto-report-v2';
 const LEGACY_AUTO_REPORT_KEYS=['v78.10.0-auto-report'];
@@ -317,7 +362,7 @@ function reportMoney(v,currency='KRW'){if(v===null||v===undefined||v==='')return
 function reportNum(v,d=1,suffix=''){const n=Number(v);return Number.isFinite(n)?`${n.toFixed(d)}${suffix}`:'확인 불가'}
 function isKrCodeClient(v){return /^\d{6}$/.test(String(v||'').trim())||/^\d{4}[0-9A-HJ-NP-TV-Z][0-9KLMN]$/i.test(String(v||'').trim())}
 function savedRowMarket(r){const m=String(r?.market||'').toUpperCase(),code=String(r?.code||r?.query||'').trim(),ex=String(r?.exchange||'').toUpperCase();if(m==='US'||ex.includes('NASDAQ')||ex.includes('NYSE')||ex.includes('AMEX'))return'US';if(m==='ETF')return'ETF';if(m==='KR'||isKrCodeClient(code))return'KR';if(/[A-Z]/i.test(code))return'US';return'AUTO'}
-function reportSourcesHtml(sources){return [...new Set(sources||[])].map(x=>`<span class="report-badge ${x==='급등주'?'surge':(x==='추천주'||String(x).startsWith('V78'))?'recommend':'watch'}">${escapeText(x)}</span>`).join('')}
+function reportSourcesHtml(sources){return [...new Set(sources||[])].map(x=>{const cls=x==='급등주'?'surge':(x==='추천주'||String(x).startsWith('V78'))?'recommend':x==='직접 분석'?'direct':'watch';return `<span class="report-badge ${cls}">${escapeText(x)}</span>`}).join('')}
 function reportSourceKey(x){const hint=String(x?.market_hint||x?.category||x?.market||'AUTO').toUpperCase(),key=String(x?.code||x?.name||'').toUpperCase();return key?`${hint}:${key}`:''}
 function addReportCandidate(map,candidate,source,meta={}){
  const baseMarket=String(candidate?.market_hint||candidate?.category||candidate?.market||'AUTO').toUpperCase();const key=reportSourceKey({...candidate,market_hint:baseMarket});if(!key)return;
@@ -425,11 +470,16 @@ function report15Sections(item,fund,news,meta,peer,a){
  ]
 }
 function reportGatesHtml(gates){return `<div class="report-gates">${(gates||[]).map(g=>`<div class="gate-${escapeText(g.state)}"><span>${escapeText(g.label)}</span><b>${escapeText(g.text)}</b></div>`).join('')}</div>`}
+function reportCardHtml(r,idx=0){const x=r.item,f=r.fund||{},n=r.news||{},pc=r.pc||{pros:[],cons:[]},sections=r.sections||[],a=r.assessment||{confidence:0,dayPct:0,gates:[]},errors=r.providerErrors||[],radarPrice=Number(r.meta?.surge_price||0),priceGap=radarPrice&&Number(x.price_krw)?Math.abs(radarPrice/Number(x.price_krw)-1)*100:0;return `<article class="auto-report-card ${r.verdict.cls}"><div class="report-head"><div><h3>${idx+1}. ${escapeText(x.name||x.code)}<small>${escapeText(x.code)} · ${escapeText(x.sector||'기타')} · ${escapeText(sessionForItem(x).label)}</small></h3><div class="report-badges">${reportSourcesHtml(r.sources)}</div></div><div class="report-verdict"><strong>${escapeText(r.verdict.label)}</strong><span>${r.score}점</span><small>근거 완성도 ${Number(a.confidence||0)}%</small></div></div><div class="report-one-line">${escapeText(r.oneLine)}</div><div class="report-kpis"><div><span>분석 현재가</span><b>${fmt(x.price_krw)}원</b></div><div><span>기회점수</span><b>${Number(x.opportunity_score||0).toFixed(0)}점</b></div><div><span>모멘텀</span><b>${Number(x.momentum||0).toFixed(0)}점</b></div><div><span>RVOL</span><b>${Number(x.rvol||0).toFixed(2)}배</b></div><div><span>손익비</span><b>1:${Number(x.rrr||0).toFixed(2)}</b></div><div><span>당일 급등</span><b>${pct(a.dayPct||0)}</b></div></div>${radarPrice?`<div class="report-source-price">레이더 탐색가 ${fmt(radarPrice)}원${priceGap>=.5?` · 기술분석 가격과 ${priceGap.toFixed(1)}% 차이 → 시점 차이 확인 필요`:''}</div>`:''}<div class="report-reasons"><div class="pros"><b>✅ 검토 근거</b>${pc.pros.map(v=>`<span>• ${escapeText(v)}</span>`).join('')}</div><div class="cons"><b>⚠️ 보류/위험 근거</b>${pc.cons.map(v=>`<span>• ${escapeText(v)}</span>`).join('')}</div></div><div class="report-plan"><div><span>진입 참고</span><b>${fmt(x.entry_krw)}원</b></div><div><span>1차 목표</span><b>${fmt(x.target1_krw)}원</b></div><div><span>손절/무효화</span><b>${fmt(x.stop1_krw)}원</b></div><div><span>수량</span><b>${x.qty>0?x.qty+'주':'대기'}</b></div><div><span>현재 행동</span><b>${escapeText(r.verdict.action)}</b></div></div>${reportGatesHtml(a.gates)}${errors.length?`<div class="report-provider-error">⚠️ 일부 데이터 수집 제한: ${escapeText(errors.join(' · '))}</div>`:''}<details class="report-detail"><summary>15개 관점 상세 리포트 펼치기</summary><div class="report-15">${sections.map((z,i)=>`<div><b>${i+1}. ${escapeText(z[0])}</b><p>${escapeText(z[1])}</p></div>`).join('')}</div><div class="report-news"><b>📰 자동 수집 최근 이슈</b>${(n.items||[]).slice(0,3).map(v=>`<span>• ${escapeText(v.title)} · ${escapeText(v.quality_label||'')}${v.age_hours!=null?` · ${Number(v.age_hours).toFixed(0)}시간 전`:''}</span>`).join('')||'<span>최근 뉴스 제목 데이터 없음</span>'}</div><div class="report-source-note">가격/기술: 국내 FDR 계열·미국 Yahoo 일봉 · 급등 탐색: 네이버 금융 · 실적: Yahoo Finance · 뉴스: 국내 네이버/미국 Yahoo. 검토점수는 앱 내부 상대평가이며 수익확률이 아닙니다. 뉴스는 제목 기반 보조분류이고, 결측값은 추정해 채우지 않습니다.</div></details></article>`}
 function renderAutoReportPack(pack){
  const list=$('autoReportList'),sum=$('autoReportSummary');if(!list||!sum)return;const rows=pack?.rows||[];if(!rows.length){sum.innerHTML='';list.innerHTML='<div class="quality-empty">표시할 자동 리포트가 없습니다. 급등주/V78 후보/관심주 포함 설정을 확인하세요.</div>';return}
  const pri=rows.filter(x=>x.verdict?.cls==='report-priority').length,cond=rows.filter(x=>x.verdict?.cls==='report-conditional').length,hold=rows.filter(x=>x.verdict?.cls==='report-hold').length,top=rows[0];sum.innerHTML=`<div><span>리포트 종목</span><b>${rows.length}개</b></div><div><span>검토순위 1위</span><b>${escapeText(top.item?.name||top.item?.code||'-')} · ${top.score}점</b></div><div><span>우선 검토</span><b>${pri}개</b></div><div><span>조건부/관찰</span><b>${cond}개</b></div><div><span>매수 보류</span><b>${hold}개</b></div>`;
- list.innerHTML=rows.map((r,idx)=>{const x=r.item,f=r.fund||{},n=r.news||{},pc=r.pc||{pros:[],cons:[]},sections=r.sections||[],a=r.assessment||{confidence:0,dayPct:0,gates:[]},errors=r.providerErrors||[],radarPrice=Number(r.meta?.surge_price||0),priceGap=radarPrice&&Number(x.price_krw)?Math.abs(radarPrice/Number(x.price_krw)-1)*100:0;return `<article class="auto-report-card ${r.verdict.cls}"><div class="report-head"><div><h3>${idx+1}. ${escapeText(x.name||x.code)}<small>${escapeText(x.code)} · ${escapeText(x.sector||'기타')} · ${escapeText(sessionForItem(x).label)}</small></h3><div class="report-badges">${reportSourcesHtml(r.sources)}</div></div><div class="report-verdict"><strong>${escapeText(r.verdict.label)}</strong><span>${r.score}점</span><small>근거 완성도 ${Number(a.confidence||0)}%</small></div></div><div class="report-one-line">${escapeText(r.oneLine)}</div><div class="report-kpis"><div><span>분석 현재가</span><b>${fmt(x.price_krw)}원</b></div><div><span>기회점수</span><b>${Number(x.opportunity_score||0).toFixed(0)}점</b></div><div><span>모멘텀</span><b>${Number(x.momentum||0).toFixed(0)}점</b></div><div><span>RVOL</span><b>${Number(x.rvol||0).toFixed(2)}배</b></div><div><span>손익비</span><b>1:${Number(x.rrr||0).toFixed(2)}</b></div><div><span>당일 급등</span><b>${pct(a.dayPct||0)}</b></div></div>${radarPrice?`<div class="report-source-price">레이더 탐색가 ${fmt(radarPrice)}원${priceGap>=.5?` · 기술분석 가격과 ${priceGap.toFixed(1)}% 차이 → 시점 차이 확인 필요`:''}</div>`:''}<div class="report-reasons"><div class="pros"><b>✅ 검토 근거</b>${pc.pros.map(v=>`<span>• ${escapeText(v)}</span>`).join('')}</div><div class="cons"><b>⚠️ 보류/위험 근거</b>${pc.cons.map(v=>`<span>• ${escapeText(v)}</span>`).join('')}</div></div><div class="report-plan"><div><span>진입 참고</span><b>${fmt(x.entry_krw)}원</b></div><div><span>1차 목표</span><b>${fmt(x.target1_krw)}원</b></div><div><span>손절/무효화</span><b>${fmt(x.stop1_krw)}원</b></div><div><span>수량</span><b>${x.qty>0?x.qty+'주':'대기'}</b></div><div><span>현재 행동</span><b>${escapeText(r.verdict.action)}</b></div></div>${reportGatesHtml(a.gates)}${errors.length?`<div class="report-provider-error">⚠️ 일부 데이터 수집 제한: ${escapeText(errors.join(' · '))}</div>`:''}<details class="report-detail"><summary>15개 관점 상세 리포트 펼치기</summary><div class="report-15">${sections.map((z,i)=>`<div><b>${i+1}. ${escapeText(z[0])}</b><p>${escapeText(z[1])}</p></div>`).join('')}</div><div class="report-news"><b>📰 자동 수집 최근 이슈</b>${(n.items||[]).slice(0,3).map(v=>`<span>• ${escapeText(v.title)} · ${escapeText(v.quality_label||'')}${v.age_hours!=null?` · ${Number(v.age_hours).toFixed(0)}시간 전`:''}</span>`).join('')||'<span>최근 뉴스 제목 데이터 없음</span>'}</div><div class="report-source-note">가격/기술: 국내 FDR 계열·미국 Yahoo 일봉 · 급등 탐색: 네이버 금융 · 실적: Yahoo Finance · 뉴스: 국내 네이버/미국 Yahoo. 검토점수는 앱 내부 상대평가이며 수익확률이 아닙니다. 뉴스는 제목 기반 보조분류이고, 결측값은 추정해 채우지 않습니다.</div></details></article>`}).join('')
+ list.innerHTML=rows.map((r,idx)=>reportCardHtml(r,idx)).join('')
 }
+function renderPromptCompanyReport(row){
+ const box=$('promptCompanyReport');if(!box||!row)return;box.innerHTML=`<div class="prompt-report-head"><b>📌 직접 기업 분석 결과</b><span>${escapeText(row.item?.name||row.item?.code||'-')} · 15개 관점</span></div>${reportCardHtml(row,0)}`;
+}
+function restorePromptCompanyReport(){const saved=loadJson(PROMPT_REPORT_KEY,null);if(saved?.row?.item){renderPromptCompanyReport(saved.row);const input=$('promptCompany');if(input&&!input.value)input.value=saved.row.item.name||saved.row.item.code||'';renderPromptCenter();return true}return false}
 function restoreAutoReport(){let p=loadJson(AUTO_REPORT_KEY,null);if(!p){for(const k of LEGACY_AUTO_REPORT_KEYS){p=loadJson(k,null);if(p)break}}if(p&&Array.isArray(p.rows)&&p.rows.length){renderAutoReportPack(p);$('autoReportStatus').textContent=`저장된 자동 리포트 ${p.rows.length}개 표시 · ${dateLabel(p.generated_at)} · 최신 분석 후 자동 갱신됩니다.`;return true}return false}
 let autoReportQueued=null;
 async function reportBuildRow(rec){
@@ -444,6 +494,7 @@ async function generateAutoReport(opts={}){
  }catch(e){$('autoReportStatus').textContent=`자동 리포트 오류: ${e.message}`;return null}finally{autoReportBusy=false;if(btn){btn.disabled=false;btn.textContent='오늘 리포트 자동 생성'}if(autoReportQueued){const q=autoReportQueued;autoReportQueued=null;setTimeout(()=>generateAutoReport(q),150)}}
 }
 $('autoReportBtn')?.addEventListener('click',()=>generateAutoReport());['reportIncludeSurge','reportIncludeRecommend','reportIncludeWatch','reportCount'].forEach(id=>$(id)?.addEventListener('change',()=>generateAutoReport({skipEnsure:allResults.some(x=>x.ok)})));
+restorePromptCompanyReport();
 if(!restoreAutoReport())$('autoReportList').innerHTML='<div class="quality-empty">최신 분석 후 자동 리포트가 생성됩니다.</div>';
 
 async function liveSearch(){
@@ -471,8 +522,8 @@ async function verifyPersistentStorage(silent=false){
 }
 async function checkConnection(){try{const r=await fetch('/health',{cache:'no-store',credentials:'include'}),d=await r.json();if(!r.ok||!d.ok)throw new Error();setServerSessions(d.sessions);mergeServerHolidays(d.holidays);if(d.storage){updateStorageDiagnostics(d.storage);if(d.storage.durability==='database')setTimeout(()=>verifyPersistentStorage(true),250)}$('onlineState').textContent=`온라인 · ${d.version}`;$('onlineDot').classList.add('ok');$('connectionText').textContent=d.pin_required?'온라인 접속 · PIN 보호 사용 중':'온라인 접속 가능 · 홈 화면 추가 지원'}catch(e){$('onlineState').textContent='서버 연결 안 됨';$('onlineDot').classList.add('bad');updateStorageDiagnostics({durability:'ephemeral-or-unknown',last_error:'서버 상태 확인 실패'})}
 }
-$('shareBtn').addEventListener('click',async()=>{const d={title:'V78.12.0 검증·최적화 자동 종목리포트',text:'최종 행동판 + 순위변화 + 추천 사후 성적표 + 위험기반 수량' ,url:location.href};try{if(navigator.share)await navigator.share(d);else{await navigator.clipboard.writeText(location.href);$('status').textContent='주소를 복사했습니다.'}}catch(e){}});window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('installBtn').classList.remove('hidden')});$('installBtn').addEventListener('click',async()=>{if(!installPrompt)return;installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;$('installBtn').classList.add('hidden')});document.querySelectorAll('.bottom-nav button').forEach(btn=>btn.addEventListener('click',()=>{if(btn.dataset.action==='held'){portfolioMode='held';renderPortfolio();if(accountConnected)portfolioCloudLoad(false,{force:true});$('portfolioCenter')?.scrollIntoView({behavior:'smooth',block:'start'});return}const el=$(btn.dataset.scroll);if(el)el.scrollIntoView({behavior:'smooth',block:'start'})}));
-loadSettings();updateMoneyNote();const restored=restoreSnapshot();checkConnection();setTimeout(()=>analyze(),restored?1200:450);if('serviceWorker'in navigator){navigator.serviceWorker.register('/static/sw.js').then(reg=>reg.update()).catch(()=>{});navigator.serviceWorker.addEventListener('controllerchange',()=>{if(!sessionStorage.getItem('v7863-reloaded')){sessionStorage.setItem('v7863-reloaded','1');location.reload()}})}
+$('shareBtn').addEventListener('click',async()=>{const d={title:'V78.12.1 검증·최적화 자동 종목리포트',text:'최종 행동판 + 순위변화 + 추천 사후 성적표 + 위험기반 수량' ,url:location.href};try{if(navigator.share)await navigator.share(d);else{await navigator.clipboard.writeText(location.href);$('status').textContent='주소를 복사했습니다.'}}catch(e){}});window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('installBtn').classList.remove('hidden')});$('installBtn').addEventListener('click',async()=>{if(!installPrompt)return;installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;$('installBtn').classList.add('hidden')});document.querySelectorAll('.bottom-nav button').forEach(btn=>btn.addEventListener('click',()=>{if(btn.dataset.action==='held'){portfolioMode='held';renderPortfolio();if(accountConnected)portfolioCloudLoad(false,{force:true});$('portfolioCenter')?.scrollIntoView({behavior:'smooth',block:'start'});return}const el=$(btn.dataset.scroll);if(el)el.scrollIntoView({behavior:'smooth',block:'start'})}));
+loadSettings();updateMoneyNote();const restored=restoreSnapshot();checkConnection();setTimeout(()=>analyze(),restored?1200:450);if('serviceWorker'in navigator){navigator.serviceWorker.register('/static/sw.js',{updateViaCache:'none'}).then(reg=>reg.update()).catch(()=>{});navigator.serviceWorker.addEventListener('controllerchange',()=>{if(!sessionStorage.getItem('v78121-reloaded')){sessionStorage.setItem('v78121-reloaded','1');location.reload()}})}
 
 // V78.3 — persistent holdings + watchlist center
 const PORTFOLIO_KEY_BASE='v78-portfolio-account-v1'; // stable across app upgrades: never version this key again
@@ -571,7 +622,7 @@ async function recoverAccountFromLocal(){
  if(!confirm(`서버의 ${id} 계정기록이 사라진 경우 이 기기의 ${local.length}개 자산자료로 계정을 다시 만들고 서버에 복원합니다. 계속할까요?`))return;
  try{const r=await fetch('/api/account/recover-local',{method:'POST',headers:baseHeaders(),credentials:'include',body:JSON.stringify({account_id:id,password:pw,local_count:local.length})}),d=await r.json();if(d.storage)updateStorageDiagnostics(d.storage);if(!r.ok||!d.ok)throw new Error(d.error||'계정 복구 실패');accountConnected=true;lastAccountErrorCode='';saveSettings();saveAccountSecret();portfolioRows=portfolioMerge(portfolioRows,local);savePortfolioLocalSafe(portfolioRows);renderPortfolio();updateRecoveryButton();const up=await portfolioCloudSave(true,portfolioRows);setAccountStatus(up.verified?`✅ ${id} 계정을 다시 만들고 이 기기 자산 ${portfolioRows.length}개를 서버에 복구했습니다.`:`📱 계정은 복구됐지만 서버 자산 업로드 확인이 필요합니다: ${up.error||''}`,up.verified)}catch(e){setAccountStatus(`계정 복구 실패: ${e.message}`)}
 }
-function exportPortfolioBackup(){const rows=portfolioLocalLoad(true),id=currentAccountId();if(!rows.length){$('portfolioStatus').textContent='백업할 보유/관심종목이 없습니다.';return}const payload={format:'v78-portfolio-backup-v1',version:'V78.12.0',account_id:id,exported_at:new Date().toISOString(),rows};const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`stock-portfolio-${id||'backup'}-${new Date().toISOString().slice(0,10)}.json`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);$('portfolioStatus').textContent=`⬇️ 자산 백업 ${rows.length}개를 저장했습니다. 비밀번호는 백업파일에 포함되지 않습니다.`}
+function exportPortfolioBackup(){const rows=portfolioLocalLoad(true),id=currentAccountId();if(!rows.length){$('portfolioStatus').textContent='백업할 보유/관심종목이 없습니다.';return}const payload={format:'v78-portfolio-backup-v1',version:'V78.12.1',account_id:id,exported_at:new Date().toISOString(),rows};const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`stock-portfolio-${id||'backup'}-${new Date().toISOString().slice(0,10)}.json`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);$('portfolioStatus').textContent=`⬇️ 자산 백업 ${rows.length}개를 저장했습니다. 비밀번호는 백업파일에 포함되지 않습니다.`}
 async function importPortfolioBackupFile(file){if(!file)return;try{const d=JSON.parse(await file.text());if(!d||d.format!=='v78-portfolio-backup-v1'||!Array.isArray(d.rows))throw new Error('지원하지 않는 백업파일입니다.');const current=portfolioLocalLoad(true),merged=portfolioMerge(current,d.rows);if(!confirm(`백업 ${d.rows.length}개를 현재 ${currentAccountId()||'기기'} 자료와 병합할까요? 병합 후 ${merged.length}개가 됩니다.`))return;portfolioRows=merged;savePortfolioLocalSafe(merged);setPending(true);renderPortfolio();updateSyncDiagnostics({localCount:merged.length});if(accountConnected){const up=await portfolioCloudSave(true,merged);$('portfolioStatus').textContent=up.verified?`✅ 백업 복원 + 서버 동기화 완료 · ${merged.length}개`:`📱 백업은 기기에 복원됨 · 서버 동기화 재시도 필요`}else $('portfolioStatus').textContent=`📱 백업 ${merged.length}개를 기기에 복원했습니다. 계정 연결 후 서버로 동기화하세요.`}catch(e){$('portfolioStatus').textContent=`백업 복원 실패: ${e.message}`}}
 function oldSyncKeyFromSettings(){try{for(const k of [SETTINGS_KEY,'v78.3.0-settings','v78.1.0-settings']){const d=JSON.parse(localStorage.getItem(k)||'{}');if(d&&d.syncKey)return String(d.syncKey).trim()}}catch(e){}return''}
 async function importLegacyData(){

@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#07101e" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="V78.12.0 주식판" />
-  <title>V78.12.0 자동 종목리포트 통합판</title>
+  <meta name="apple-mobile-web-app-title" content="V78.12.1 주식판" />
+  <title>V78.12.1 자동 종목리포트 통합판</title>
   <link rel="manifest" href="/static/manifest.json" />
   <link rel="icon" href="/static/icon-192.png" />
   <link rel="apple-touch-icon" href="/static/icon-192.png" />
@@ -16,7 +16,7 @@
 <body>
   <header class="topbar">
     <div class="brand-wrap">
-      <div class="eyebrow">V78.12.0 · 급등주·V78후보·관심주 자동리포트 검증판</div>
+      <div class="eyebrow">V78.12.1 · 급등주·V78후보·관심주 자동리포트 검증판</div>
       <h1>오늘 사도 돼?</h1>
       <p id="connectionText">열자마자 YES · WAIT · NO만 먼저 확인</p>
     </div>
@@ -116,13 +116,21 @@
     </section>
 
     <section class="prompt-center card" id="promptCenterSection">
-      <div class="section-title-row"><div><b>🧠 주식 분석 ChatGPT 프롬프트 15</b><span>자동 리포트가 이 15개 관점을 내부적으로 반영합니다. 원문 질문이 필요할 때만 직접 복사해 사용하세요</span></div></div>
-      <div class="prompt-tools">
-        <input id="promptCompany" type="text" placeholder="기업명/종목명 (예: 삼성전자)" />
+      <div class="section-title-row"><div><b>🧠 기업 15관점 자동 분석</b><span>기업명을 입력하면 15개 관점에 즉시 반영되고, 선택/Enter/버튼으로 해당 기업의 자동 리포트를 생성합니다.</span></div></div>
+      <div class="prompt-tools prompt-tools-v2">
+        <div class="symbol-picker prompt-company-picker">
+          <input id="promptCompany" type="text" autocomplete="off" placeholder="기업명/종목코드 (예: 삼성전자, NVDA)" />
+          <div id="promptCompanySuggestions" class="symbol-suggestions" hidden></div>
+        </div>
+        <select id="promptMarket" aria-label="기업 분석 시장"><option value="AUTO" selected>시장 자동</option><option value="KR">국내</option><option value="US">미국</option><option value="ETF">국내 ETF</option></select>
+        <button id="promptAnalyzeBtn" class="primary" type="button">기업 자동 리포트 생성</button>
         <button id="promptUseSearchBtn" class="secondary" type="button">검색창 종목 가져오기</button>
         <button id="promptCopyAllBtn" class="ghost" type="button">15개 전체 복사</button>
       </div>
-      <div id="promptStatus" class="status compact">기업명을 넣으면 15개 문구가 자동으로 바뀝니다.</div>
+      <div id="promptSelected" class="prompt-selected" hidden></div>
+      <div id="promptStatus" class="status compact">기업명을 입력하면 아래 15개 질문이 즉시 바뀝니다. Enter를 누르면 자동 리포트를 생성합니다.</div>
+      <div id="promptCompanyReport" class="prompt-company-report"></div>
+      <div class="prompt-subtitle"><b>15개 분석 질문</b><span>자동 리포트와 같은 관점의 원문입니다.</span></div>
       <div id="promptGrid" class="prompt-grid"></div>
     </section>
 
@@ -269,7 +277,7 @@
     </section>
 
     <section class="performance-section card" id="feedbackSection">
-      <div class="section-title-row"><div><b>🧠 V78.12.0 시장확산·적응형 후보·성과 피드백 엔진</b><span>D+5 실제 관찰결과를 전략·시장국면·추천유형별로 분해하고 추정확률의 보정오차를 확인합니다</span></div></div>
+      <div class="section-title-row"><div><b>🧠 V78.12.1 시장확산·적응형 후보·성과 피드백 엔진</b><span>D+5 실제 관찰결과를 전략·시장국면·추천유형별로 분해하고 추정확률의 보정오차를 확인합니다</span></div></div>
       <div id="feedbackEngine"><div class="quality-empty">D+5 완료 기록이 쌓이면 자동 분석합니다.</div></div>
       <p class="quality-note">※ 브라우저 로컬 기록 기반 감사 기능입니다. 미래 성과를 보장하거나 자동으로 공격성을 높이지 않습니다.</p>
     </section>

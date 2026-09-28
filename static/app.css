@@ -166,3 +166,14 @@
 .report-provider-error{margin-top:8px;padding:7px 9px;border:1px dashed #7a5f26;border-radius:9px;background:#251e0d;color:#e6ca79;font-size:9px;line-height:1.45}
 @media(max-width:900px){.surge-controls{grid-template-columns:1fr 1fr}.surge-common-toggle{grid-column:1/-1}.report-gates{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:600px){.report-gates{grid-template-columns:1fr 1fr}.surge-common-toggle{grid-column:1/-1}}
+
+/* V78.12.1 prompt-center actionability + direct company report */
+.prompt-tools-v2{grid-template-columns:minmax(220px,1.5fr) minmax(110px,.45fr) auto auto auto;align-items:start}
+.prompt-company-picker{min-width:0}.prompt-company-picker .symbol-suggestions{z-index:40}
+.prompt-selected{margin-top:8px;padding:8px 10px;border:1px solid #2f6b55;border-radius:10px;background:#0b201b;color:#b9f1d8;font-size:11px;font-weight:700}
+.prompt-company-report{margin-top:10px}.prompt-company-report:empty{display:none}
+.prompt-report-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin:10px 0 8px;padding:9px 11px;border:1px solid #34506f;border-radius:11px;background:#0c1a2a}.prompt-report-head b{font-size:12px;color:#e9f4ff}.prompt-report-head span{font-size:10px;color:#9fb5cc}
+.prompt-subtitle{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:12px}.prompt-subtitle b{font-size:12px}.prompt-subtitle span{font-size:10px;color:#8fa3ba}
+.report-badge.direct{background:#173c2d;border-color:#2d7f5d;color:#baf2d5}
+@media(max-width:1050px){.prompt-tools-v2{grid-template-columns:1fr 140px;}.prompt-tools-v2 .primary,.prompt-tools-v2 .secondary,.prompt-tools-v2 .ghost{width:100%}}
+@media(max-width:700px){.prompt-tools-v2{grid-template-columns:1fr}.prompt-report-head{align-items:flex-start;flex-direction:column}.prompt-company-report .auto-report-card{margin-top:0}}

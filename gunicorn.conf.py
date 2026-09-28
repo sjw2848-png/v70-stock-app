@@ -1,6 +1,6 @@
 import os
 
-# V78.12.0: single source of truth for gunicorn settings (render.yaml now just points here).
+# V78.12.1: single source of truth for gunicorn settings (render.yaml now just points here).
 bind = f"0.0.0.0:{os.environ.get('PORT', '10000')}"
 workers = 1            # in-process caches + one shared DB connection assume a single worker
 threads = int(os.environ.get('GUNICORN_THREADS', '4'))

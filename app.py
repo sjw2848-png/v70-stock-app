@@ -18,7 +18,7 @@ from state_store import StateStore, StorageUnavailable
 from engine import analyze, analyze_search, search_instruments, fetch_fundamentals, fetch_recent_issues
 import market_calendar
 
-APP_VERSION = 'V78.12.0'
+APP_VERSION = 'V78.12.1'
 app = Flask(__name__)
 
 _cache_lock = threading.Lock()
@@ -303,6 +303,16 @@ def _storage_unavailable(exc):
 @app.get('/')
 def home():
     return render_template('index.html', version=APP_VERSION, pin_required=bool(APP_PIN))
+
+
+@app.after_request
+def _shell_cache_headers(response):
+    # V78.12.1: PWA shell must revalidate on every deploy so old app.js does not linger.
+    if request.path in ('/', '/static/app.js', '/static/sw.js', '/static/manifest.json'):
+        response.headers['Cache-Control'] = 'no-cache, max-age=0, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+    return response
 
 
 @app.get('/health')
