@@ -27,7 +27,7 @@ databases:
     databaseName: v78_stock
     user: v78_stock_user
 
-# V78.8.2
+# V78.9.0
 # Blueprint deployment automatically injects the PostgreSQL internal connection string.
 # To reuse an existing lottery PostgreSQL instead, remove the databases/fromDatabase mapping
 # and set the Stock Web Service DATABASE_URL once to that database's Internal URL.

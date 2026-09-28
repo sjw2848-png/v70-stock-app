@@ -10,10 +10,13 @@ import webbrowser
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, render_template, request, g
+import re
+import requests
+from lxml import html as lxml_html
 from state_store import StateStore
 from engine import analyze, analyze_search, search_instruments, fetch_fundamentals, fetch_recent_issues
 
-APP_VERSION = 'V78.8.2'
+APP_VERSION = 'V78.9.0'
 app = Flask(__name__)
 
 _cache_lock = threading.Lock()
@@ -21,6 +24,7 @@ _cache = {}
 _last_request_by_ip = {}
 _fund_cache = {}
 _issue_cache = {}
+_surge_cache = {}
 CACHE_TTL = max(0, int(os.environ.get('CACHE_TTL_SECONDS', '120')))
 MIN_REQUEST_GAP = max(0.0, float(os.environ.get('MIN_REQUEST_GAP_SECONDS', '2')))
 APP_PIN = os.environ.get('APP_PIN', '').strip()
@@ -32,7 +36,7 @@ PORTFOLIO_FILE = os.path.join(DATA_DIR, 'portfolio.json')
 PORTFOLIO_BACKUP_FILE = os.path.join(DATA_DIR, 'portfolio.backup.json')
 ACCOUNTS_FILE = os.path.join(DATA_DIR, 'accounts.json')
 ACCOUNTS_BACKUP_FILE = os.path.join(DATA_DIR, 'accounts.backup.json')
-# V78.8.2: database-first persistence. DATABASE_URL is the standard Render variable.
+# V78.9.0: database-first persistence. DATABASE_URL is the standard Render variable.
 # STOCK_DATABASE_URL / LOTTO_DATABASE_URL are accepted as explicit aliases so the stock
 # service can reuse an already-managed PostgreSQL instance without changing application code.
 _DATABASE_CANDIDATES = [
@@ -100,7 +104,7 @@ def _normalize_account_id(value):
     return ''.join(ch for ch in raw if ch.isalnum() or ch in {'-','_','.'})[:40]
 
 def _read_accounts():
-    # V78.8.2: account registry and portfolio now share the same persistence abstraction.
+    # V78.9.0: account registry and portfolio now share the same persistence abstraction.
     # The old code accidentally used portfolio.backup.json as an account fallback, which could
     # make a valid ID appear to be missing after a damaged/missing accounts.json.
     return _state_store.read('accounts', ACCOUNTS_FILE, ACCOUNTS_BACKUP_FILE)
@@ -409,6 +413,120 @@ def api_search():
 
 
 
+def _to_number(text, default=0.0):
+    raw = str(text or '').replace(',', '').replace('%', '').replace('+', '').replace('−', '-').replace('▲','').replace('▼','').strip()
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _fetch_naver_risers(sosok: int, limit: int = 40):
+    """Fetch KOSPI/KOSDAQ top risers from Naver Finance.
+
+    This is a display/discovery source only. The app still re-runs its own per-symbol
+    analysis before showing any trading signal. Naver quotes can be delayed.
+    """
+    url = f'https://finance.naver.com/sise/sise_rise.naver?sosok={int(sosok)}'
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/123 Safari/537.36',
+        'Referer': 'https://finance.naver.com/'
+    }
+    resp = requests.get(url, headers=headers, timeout=8)
+    resp.raise_for_status()
+    # Naver Finance legacy pages are commonly EUC-KR encoded.
+    if not resp.encoding or str(resp.encoding).lower() in {'iso-8859-1', 'ascii'}:
+        resp.encoding = resp.apparent_encoding or 'euc-kr'
+    tree = lxml_html.fromstring(resp.text)
+    market_name = 'KOSPI' if int(sosok) == 0 else 'KOSDAQ'
+    out = []
+    for tr in tree.xpath('//table[contains(@class,"type_2")]//tr'):
+        anchors = tr.xpath('.//a[contains(@href,"code=")]')
+        if not anchors:
+            continue
+        a = anchors[0]
+        href = a.get('href') or ''
+        m = re.search(r'code=(\d{6})', href)
+        if not m:
+            continue
+        code = m.group(1)
+        name = ' '.join(''.join(a.itertext()).split())
+        cells = [' '.join(''.join(td.itertext()).split()) for td in tr.xpath('./td')]
+        if len(cells) < 6:
+            continue
+        price = int(_to_number(cells[2], 0)) if len(cells) > 2 else 0
+        change_pct = _to_number(cells[4], 0) if len(cells) > 4 else 0.0
+        volume = int(_to_number(cells[5], 0)) if len(cells) > 5 else 0
+        # Naver's 거래대금 column is normally displayed in 백만원. If layout changes,
+        # fall back to current price × volume as an approximate turnover.
+        turnover = 0
+        if len(cells) > 8:
+            turnover = int(_to_number(cells[8], 0) * 1_000_000)
+        if turnover <= 0 and price > 0 and volume > 0:
+            turnover = int(price * volume)
+        out.append({
+            'code': code,
+            'name': name or code,
+            'market': 'KR',
+            'exchange': market_name,
+            'price': price,
+            'change_pct': round(change_pct, 2),
+            'volume': volume,
+            'turnover_krw': turnover,
+            'source': 'Naver Finance',
+        })
+        if len(out) >= max(10, min(int(limit), 80)):
+            break
+    return out
+
+
+@app.get('/api/surge-stocks')
+def api_surge_stocks():
+    if not _authorized():
+        return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.', 'code': 'PIN_REQUIRED'}), 401
+    market = str(request.args.get('market', 'ALL')).upper()
+    try:
+        min_change = max(0.0, min(float(request.args.get('min_change', 5)), 29.99))
+    except (TypeError, ValueError):
+        min_change = 5.0
+    try:
+        min_turnover_eok = max(0.0, min(float(request.args.get('min_turnover_eok', 10)), 100000))
+    except (TypeError, ValueError):
+        min_turnover_eok = 10.0
+    try:
+        limit = max(5, min(int(request.args.get('limit', 30)), 60))
+    except (TypeError, ValueError):
+        limit = 30
+
+    key = f'{market}:{min_change:.2f}:{min_turnover_eok:.2f}:{limit}'
+    now = time.time()
+    cached = _surge_cache.get(key)
+    if cached and now - cached['ts'] < 45:
+        return jsonify({'ok': True, **cached['data'], 'cache_hit': True, 'version': APP_VERSION})
+
+    try:
+        raw = []
+        if market in {'ALL', 'KOSPI'}:
+            raw.extend(_fetch_naver_risers(0, max(limit, 30)))
+        if market in {'ALL', 'KOSDAQ'}:
+            raw.extend(_fetch_naver_risers(1, max(limit, 30)))
+        min_turnover = min_turnover_eok * 100_000_000
+        items = [x for x in raw if float(x.get('change_pct') or 0) >= min_change and int(x.get('turnover_krw') or 0) >= min_turnover]
+        items.sort(key=lambda x: (float(x.get('change_pct') or 0), int(x.get('turnover_krw') or 0)), reverse=True)
+        items = items[:limit]
+        payload = {
+            'items': items,
+            'generated_at': _now_iso(),
+            'filters': {'market': market, 'min_change_pct': min_change, 'min_turnover_eok': min_turnover_eok, 'limit': limit},
+            'source_note': '네이버 금융 등락률 페이지 기반. 장중 시세는 지연될 수 있으며, 자동매수 신호가 아니라 당일 급등 후보 탐색용입니다.'
+        }
+        _surge_cache[key] = {'ts': now, 'data': payload}
+        if len(_surge_cache) > 30:
+            for k, _ in sorted(_surge_cache.items(), key=lambda kv: kv[1]['ts'])[:10]:
+                _surge_cache.pop(k, None)
+        return jsonify({'ok': True, **payload, 'cache_hit': False, 'version': APP_VERSION})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': f'급등주 원본 조회 실패: {str(e)[:220]}', 'items': [], 'version': APP_VERSION}), 502
 
 
 @app.get('/api/symbols')

@@ -123,3 +123,18 @@
 .sector-chip,.sector-source-chip{display:inline-flex;align-items:center;padding:3px 7px;border-radius:999px;background:rgba(85,176,255,.12);border:1px solid rgba(85,176,255,.22)}
 .sector-source-chip{background:rgba(127,127,127,.08);border-color:rgba(127,127,127,.18);opacity:.88}
 .symbol-suggestion .symbol-sector{display:block;margin-top:2px;opacity:.78}
+
+
+/* V78.9.0 daily surge radar + 15-prompt research center */
+.surge-radar,.prompt-center{margin-top:14px}
+.surge-controls{display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px;align-items:end;margin-top:10px}
+.surge-controls label{display:flex;flex-direction:column;gap:5px;font-size:.8rem}
+.surge-manual{display:grid;grid-template-columns:1fr auto auto;gap:8px;margin-top:9px}
+.surge-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:10px}
+.surge-item{border:1px solid #2b4058;border-radius:13px;background:#091523;padding:11px;min-width:0}
+.surge-item.manual{border-style:dashed;border-color:#6d5aa7}
+.surge-head{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}.surge-head b{font-size:14px}.surge-head small{display:block;color:#8da0b7;margin-top:2px;font-size:10px}
+.surge-change{font-size:15px;font-weight:900;color:#ff7b72;white-space:nowrap}.surge-kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin:8px 0}.surge-kpis span{background:#07111f;border-radius:8px;padding:6px;font-size:9px;color:#8fa1b7}.surge-kpis b{display:block;color:#eaf2fa;font-size:10px;margin-top:2px}.surge-actions{display:flex;gap:6px;flex-wrap:wrap}.surge-actions button{padding:6px 9px;font-size:10px}.surge-empty{grid-column:1/-1;padding:16px;border:1px dashed #334155;border-radius:12px;text-align:center;color:#92a4b9}
+.prompt-tools{display:grid;grid-template-columns:1fr auto auto;gap:8px;margin-top:10px}.prompt-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:10px}.prompt-card{border:1px solid #2c4058;background:#091523;border-radius:13px;padding:11px;display:flex;flex-direction:column;min-height:172px}.prompt-card h3{font-size:12px;margin:0 0 7px;color:#dce9f7}.prompt-card p{font-size:10px;line-height:1.55;color:#aabbd0;margin:0;white-space:pre-wrap}.prompt-card button{margin-top:auto;align-self:flex-start;padding:6px 9px;font-size:10px}.prompt-num{display:inline-flex;width:22px;height:22px;align-items:center;justify-content:center;border-radius:999px;background:#173152;color:#9fd1ff;margin-right:5px}
+@media(max-width:900px){.prompt-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:700px){.surge-controls{grid-template-columns:1fr 1fr}.surge-controls button{grid-column:1/-1}.surge-manual,.prompt-tools{grid-template-columns:1fr}.surge-list,.prompt-grid{grid-template-columns:1fr}.surge-kpis{grid-template-columns:repeat(3,1fr)}}

@@ -1,5 +1,5 @@
 const $=id=>document.getElementById(id);
-const SETTINGS_KEY='v78.7.0-settings', SNAPSHOT_KEY='v70-shared-last-snapshot';
+const SETTINGS_KEY='v78.9.0-settings', SNAPSHOT_KEY='v70-shared-last-snapshot';
 const HISTORY_KEY='v78.3.0-recommendation-history', RANK_KEY='v78.3.0-rank-baseline';
 const LEGACY_SNAPSHOT_KEYS=['v70.13.1-last-snapshot','v70.13-last-snapshot','v70.12-last-snapshot','v70.11-last-snapshot','v70.10-last-snapshot','v70.9-last-snapshot'];
 const fields=['budget','tradeBudget','longBudget','savingGoal','monthlySaving','currentSaving','riskPct','stopPct','minRrr','trustMode','mode','topN','held','appPin','accountId'];
@@ -248,6 +248,58 @@ function installSymbolPicker(inputId,boxId,marketId,onPick){
 installSymbolPicker('liveSearchInput','liveSearchSuggestions','liveSearchMarket',x=>{$('liveSearchStatus').textContent=`선택: ${x.name} (${x.code}) · ${x.type}`});
 installSymbolPicker('portfolioQuery','portfolioSuggestions','portfolioMarket',x=>{$('portfolioStatus').textContent=`선택: ${x.name} (${x.code}) · ${x.type} · 이제 보유주/관심종목으로 저장할 수 있습니다.`});
 
+
+// V78.9.0: daily surge-stock radar. Discovery only; per-symbol analysis remains separate.
+const SURGE_MANUAL_KEY='v78.9.0-surge-manual';
+let surgeAutoRows=[];
+function surgeManualLoad(){const x=loadJson(SURGE_MANUAL_KEY,[]);return Array.isArray(x)?x:[]}
+function surgeManualSave(rows){saveJson(SURGE_MANUAL_KEY,(rows||[]).slice(0,30))}
+function surgeTurnoverLabel(v){const n=Number(v||0);if(!n)return'-';const eok=n/100000000;return eok>=10000?`${(eok/10000).toFixed(1)}조`:`${eok.toFixed(eok>=100?0:1)}억`}
+function renderSurgeRadar(){
+ const box=$('surgeList');if(!box)return;const manual=surgeManualLoad().map(x=>({...x,manual:true}));const seen=new Set(),rows=[];
+ for(const x of [...manual,...surgeAutoRows]){const k=String(x.code||x.name||'').toUpperCase();if(!k||seen.has(k))continue;seen.add(k);rows.push(x)}
+ if(!rows.length){box.innerHTML='<div class="surge-empty">아직 표시할 종목이 없습니다. ‘오늘 급등주 검색’을 누르거나 종목을 직접 넣으세요.</div>';return}
+ box.innerHTML=rows.map((x,i)=>{const ch=Number(x.change_pct||0),heat=ch>=20?'상한가 근접':ch>=10?'급등':ch>=5?'강세':'직접추가';return `<div class="surge-item ${x.manual?'manual':''}"><div class="surge-head"><div><b>${escapeText(x.name||x.code)}</b><small>${escapeText(x.code||'')} · ${escapeText(x.exchange||'직접 추가')} · ${escapeText(heat)}</small></div><span class="surge-change">${x.manual&&ch===0?'직접':pct(ch)}</span></div><div class="surge-kpis"><span>현재가<b>${x.price?fmt(x.price)+'원':'-'}</b></span><span>거래량<b>${x.volume?compact(x.volume):'-'}</b></span><span>거래대금<b>${surgeTurnoverLabel(x.turnover_krw)}</b></span></div><div class="surge-actions"><button type="button" class="primary" data-surge-analyze="${i}">이 종목 분석</button><button type="button" class="secondary" data-surge-prompt="${i}">15개 질문에 넣기</button>${x.manual?`<button type="button" class="ghost" data-surge-remove="${escapeText(x.code||x.name)}">삭제</button>`:''}</div></div>`}).join('');
+ box.querySelectorAll('[data-surge-analyze]').forEach(b=>b.onclick=()=>{const x=rows[Number(b.dataset.surgeAnalyze)];$('liveSearchInput').value=x.code||x.name;$('liveSearchMarket').value='KR';$('liveSearchSection').scrollIntoView({behavior:'smooth'});liveSearch()});
+ box.querySelectorAll('[data-surge-prompt]').forEach(b=>b.onclick=()=>{const x=rows[Number(b.dataset.surgePrompt)];$('promptCompany').value=x.name||x.code;renderPromptCenter();$('promptCenterSection').scrollIntoView({behavior:'smooth'})});
+ box.querySelectorAll('[data-surge-remove]').forEach(b=>b.onclick=()=>{const k=String(b.dataset.surgeRemove||'').toUpperCase();surgeManualSave(surgeManualLoad().filter(x=>String(x.code||x.name||'').toUpperCase()!==k));renderSurgeRadar()});
+}
+async function loadSurgeRadar(){
+ const btn=$('surgeRefreshBtn');if(!btn)return;btn.disabled=true;btn.textContent='검색 중…';$('surgeStatus').textContent='코스피·코스닥 당일 상승 종목을 확인 중입니다.';
+ try{const q=new URLSearchParams({market:$('surgeMarket').value,min_change:$('surgeMinChange').value||'5',min_turnover_eok:$('surgeMinTurnover').value||'10',limit:'30'});const r=await fetch(`/api/surge-stocks?${q}`,{headers:baseHeaders(),cache:'no-store'}),d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'급등주 검색 실패');surgeAutoRows=Array.isArray(d.items)?d.items:[];renderSurgeRadar();$('surgeStatus').textContent=`🚀 ${surgeAutoRows.length}개 표시 · 기준 +${Number(d.filters?.min_change_pct||0).toFixed(1)}% 이상 · 거래대금 ${Number(d.filters?.min_turnover_eok||0).toFixed(0)}억 이상 · ${dateLabel(d.generated_at)}${d.cache_hit?' · 최근 조회 재사용':''}`}
+ catch(e){surgeAutoRows=[];renderSurgeRadar();$('surgeStatus').textContent=`자동 검색 오류: ${e.message} · 직접 추가 기능은 계속 사용할 수 있습니다.`}
+ finally{btn.disabled=false;btn.textContent='오늘 급등주 검색'}
+}
+async function addManualSurge(){
+ const input=$('surgeManualInput'),q=input.value.trim();if(!q)return;$('surgeStatus').textContent=`${q} 종목 확인 중…`;let rec={code:q,name:q,market:'KR',exchange:'직접 추가',change_pct:0,price:0,volume:0,turnover_krw:0};
+ try{const r=await fetch(`/api/symbols?q=${encodeURIComponent(q)}&market=KR`,{headers:baseHeaders(),cache:'no-store'}),d=await r.json();if(r.ok&&d.ok&&Array.isArray(d.items)&&d.items.length){const x=d.items[0];rec={...rec,code:x.code||q,name:x.name||q,exchange:x.exchange||'직접 추가'}}}catch(e){}
+ const rows=surgeManualLoad().filter(x=>String(x.code||x.name).toUpperCase()!==String(rec.code||rec.name).toUpperCase());rows.unshift(rec);surgeManualSave(rows);input.value='';renderSurgeRadar();$('surgeStatus').textContent=`✅ ${rec.name} (${rec.code}) 직접 추가 완료 · ‘이 종목 분석’으로 바로 확인할 수 있습니다.`
+}
+$('surgeRefreshBtn')?.addEventListener('click',loadSurgeRadar);$('surgeManualAddBtn')?.addEventListener('click',addManualSurge);$('surgeManualInput')?.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();addManualSurge()}});$('surgeManualClearBtn')?.addEventListener('click',()=>{surgeManualSave([]);renderSurgeRadar();$('surgeStatus').textContent='직접 추가 목록을 비웠습니다.'});
+renderSurgeRadar();setTimeout(loadSurgeRadar,700);
+
+// V78.9.0: screenshot-based 15 prompt library, customized to the selected company/budget.
+const STOCK_PROMPTS=[
+ ['사업 이해하기',c=>`${c}이 어떤 사업으로 돈을 버는지 사업별 매출 비중과 핵심 수익원을 설명해줘.`],
+ ['최근 실적 분석',c=>`${c}의 최근 실적을 정리하고 전년 대비 개선된 점과 아쉬운 점을 분석해줘.`],
+ ['재무제표 점검',c=>`${c}의 재무제표에서 부채, 현금흐름, 이익률 등 주의할 위험신호를 체크리스트로 정리해줘.`],
+ ['경쟁사와 비교',c=>`${c}와 [비교기업]을 성장률, 수익성, 밸류에이션, 시장점유율 기준으로 비교해줘.`],
+ ['지금 주가 분석',c=>`${c}의 PER, PBR, EV/EBITDA 등을 과거 평균과 경쟁사와 비교해 현재 밸류에이션 수준을 분석해줘.`],
+ ['성장 이유 찾기',c=>`${c}의 향후 3~5년 성장동력을 찾아주고, 각 요인이 실제 실적으로 이어질 조건을 알려줘.`],
+ ['투자 리스크 점검',c=>`${c}에 투자하지 말아야 할 이유를 실적, 경쟁, 산업, 규제, 밸류에이션 관점에서 최대한 강하게 분석해줘.`],
+ ['시나리오 분석',c=>`${c}의 향후 실적을 낙관·기준·비관 3가지 시나리오로 나눠주고, 각 시나리오가 성립할 조건을 알려줘.`],
+ ['투자 비중 계산',c=>`내 투자자산은 ${fmt(Number($('budget')?.value||0))}원이고 ${c}에 ${fmt(Number($('tradeBudget')?.value||0))}원 투자하려 해. 한 종목 집중 시 위험과 손실 영향을 계산해줘.`],
+ ['분할매수 계획',c=>`${c}에 총 ${fmt(Number($('tradeBudget')?.value||0))}원을 투자한다고 가정할 때, 가격 기준과 기간 기준으로 나눠 접근하는 방법을 각각 정리해줘.`],
+ ['실적 발표 분석',c=>`${c}의 최신 실적 발표 내용을 바탕으로 매출, 이익, 가이던스에서 시장 기대와 달라진 점을 정리해줘.`],
+ ['뉴스 영향 분석',c=>`[뉴스 내용]을 바탕으로 ${c}의 매출, 이익, 기업가치에 미치는 실제 영향과 단순한 시장 소음을 구분해줘.`],
+ ['투자 논리 점검',c=>`내가 ${c}을 산 이유는 [내 투자논리]. 최근 실적과 사업 변화를 기준으로 투자 논리가 유지·강화·훼손됐는지 점검해줘.`],
+ ['매도 기준 설정',c=>`${c}을 보유 중이야. 투자논리가 훼손됐다고 판단할 수 있는 조건을 실적, 사업, 재무, 경쟁력 기준으로 정리해줘.`],
+ ['투자 복기하기',c=>`${c}을 [매수가]원에 매수해서 [매도가]원에 매도했어. 결과보다 의사결정 과정을 분석해 잘한 점, 아쉬운 점, 다음에 반복할 원칙 3가지를 정리해줘.`]
+];
+function promptCompany(){return String($('promptCompany')?.value||'').trim()||'[기업명]'}
+function renderPromptCenter(){const box=$('promptGrid');if(!box)return;const c=promptCompany();box.innerHTML=STOCK_PROMPTS.map((p,i)=>`<article class="prompt-card"><h3><span class="prompt-num">${i+1}</span>${escapeText(p[0])}</h3><p>${escapeText(p[1](c))}</p><button type="button" class="secondary" data-prompt-copy="${i}">복사</button></article>`).join('');box.querySelectorAll('[data-prompt-copy]').forEach(b=>b.onclick=async()=>{const i=Number(b.dataset.promptCopy),txt=STOCK_PROMPTS[i][1](promptCompany());try{await navigator.clipboard.writeText(txt);$('promptStatus').textContent=`✅ ${i+1}. ${STOCK_PROMPTS[i][0]} 프롬프트를 복사했습니다.`}catch(e){$('promptStatus').textContent='클립보드 권한이 없어 자동 복사하지 못했습니다.'}})}
+$('promptCompany')?.addEventListener('input',renderPromptCenter);$('promptUseSearchBtn')?.addEventListener('click',()=>{const live=$('liveSearchInput').value.trim(),selected=$('liveSearchInput').dataset.selectedName||'';$('promptCompany').value=selected||live||'';renderPromptCenter();$('promptStatus').textContent=live||selected?'실시간 검색창의 종목을 반영했습니다.':'실시간 검색창이 비어 있습니다.'});$('promptCopyAllBtn')?.addEventListener('click',async()=>{const c=promptCompany(),txt=STOCK_PROMPTS.map((p,i)=>`${i+1}. ${p[0]}\n${p[1](c)}`).join('\n\n');try{await navigator.clipboard.writeText(txt);$('promptStatus').textContent='✅ 15개 프롬프트 전체를 복사했습니다.'}catch(e){$('promptStatus').textContent='클립보드 권한이 없어 전체 복사하지 못했습니다.'}});renderPromptCenter();
+
 async function liveSearch(){
  const q=$('liveSearchInput').value.trim();if(!q){$('liveSearchStatus').textContent='종목명 또는 종목코드를 입력하세요.';return}
  saveSettings();updateMoneyNote();const btn=$('liveSearchBtn');btn.disabled=true;btn.textContent='분석 중…';$('liveSearchStatus').textContent=`${q} 데이터를 불러오는 중입니다.`;$('liveSearchResult').innerHTML='';
@@ -273,7 +325,7 @@ async function verifyPersistentStorage(silent=false){
 }
 async function checkConnection(){try{const r=await fetch('/health',{cache:'no-store',credentials:'include'}),d=await r.json();if(!r.ok||!d.ok)throw new Error();serverSessions=d.sessions||serverSessions;if(d.storage){updateStorageDiagnostics(d.storage);if(d.storage.durability==='database')setTimeout(()=>verifyPersistentStorage(true),250)}$('onlineState').textContent=`온라인 · ${d.version}`;$('onlineDot').classList.add('ok');$('connectionText').textContent=d.pin_required?'온라인 접속 · PIN 보호 사용 중':'온라인 접속 가능 · 홈 화면 추가 지원'}catch(e){$('onlineState').textContent='서버 연결 안 됨';$('onlineDot').classList.add('bad');updateStorageDiagnostics({durability:'ephemeral-or-unknown',last_error:'서버 상태 확인 실패'})}
 }
-$('shareBtn').addEventListener('click',async()=>{const d={title:'V78.8.2 강세장 적응·검색분리 통합판',text:'최종 행동판 + 순위변화 + 추천 사후 성적표 + 위험기반 수량' ,url:location.href};try{if(navigator.share)await navigator.share(d);else{await navigator.clipboard.writeText(location.href);$('status').textContent='주소를 복사했습니다.'}}catch(e){}});window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('installBtn').classList.remove('hidden')});$('installBtn').addEventListener('click',async()=>{if(!installPrompt)return;installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;$('installBtn').classList.add('hidden')});document.querySelectorAll('.bottom-nav button').forEach(btn=>btn.addEventListener('click',()=>{if(btn.dataset.action==='held'){portfolioMode='held';renderPortfolio();if(accountConnected)portfolioCloudLoad(false,{force:true});$('portfolioCenter')?.scrollIntoView({behavior:'smooth',block:'start'});return}const el=$(btn.dataset.scroll);if(el)el.scrollIntoView({behavior:'smooth',block:'start'})}));
+$('shareBtn').addEventListener('click',async()=>{const d={title:'V78.9.0 강세장 적응·검색분리 통합판',text:'최종 행동판 + 순위변화 + 추천 사후 성적표 + 위험기반 수량' ,url:location.href};try{if(navigator.share)await navigator.share(d);else{await navigator.clipboard.writeText(location.href);$('status').textContent='주소를 복사했습니다.'}}catch(e){}});window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('installBtn').classList.remove('hidden')});$('installBtn').addEventListener('click',async()=>{if(!installPrompt)return;installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;$('installBtn').classList.add('hidden')});document.querySelectorAll('.bottom-nav button').forEach(btn=>btn.addEventListener('click',()=>{if(btn.dataset.action==='held'){portfolioMode='held';renderPortfolio();if(accountConnected)portfolioCloudLoad(false,{force:true});$('portfolioCenter')?.scrollIntoView({behavior:'smooth',block:'start'});return}const el=$(btn.dataset.scroll);if(el)el.scrollIntoView({behavior:'smooth',block:'start'})}));
 loadSettings();updateMoneyNote();const restored=restoreSnapshot();checkConnection();setTimeout(()=>analyze(),restored?1200:450);if('serviceWorker'in navigator){navigator.serviceWorker.register('/static/sw.js').then(reg=>reg.update()).catch(()=>{});navigator.serviceWorker.addEventListener('controllerchange',()=>{if(!sessionStorage.getItem('v7863-reloaded')){sessionStorage.setItem('v7863-reloaded','1');location.reload()}})}
 
 // V78.3 — persistent holdings + watchlist center
@@ -301,7 +353,7 @@ function updateStorageDiagnostics(storage){
  lastStorageStatus=storage||lastStorageStatus;const el=$('storageDiagnostics');if(!el)return;const st=lastStorageStatus||{};
  if(st.durability==='database'){el.dataset.state='ok';el.innerHTML=`💾 <b>PostgreSQL 영구저장 연결됨</b> · ${st.database_source||'DATABASE_URL'} · 전용 ${st.database_namespace||'stock_app_state'} 테이블 · 계정/보유종목 자동저장`;}
  else if(st.durability==='persistent-disk'){el.dataset.state='ok';el.innerHTML='💾 <b>Persistent Disk 감지</b> · 계정/보유종목 파일을 영구 디스크에 저장합니다.'}
- else{el.dataset.state='warn';el.innerHTML='⚠️ <b>PostgreSQL 미연결</b> · 파일 임시저장만 사용 중입니다. V78.8.2 Blueprint DB 자동연결을 적용하거나 기존 로또 DB의 Internal URL을 DATABASE_URL에 연결하세요.'}
+ else{el.dataset.state='warn';el.innerHTML='⚠️ <b>PostgreSQL 미연결</b> · 파일 임시저장만 사용 중입니다. V78.9.0 Blueprint DB 자동연결을 적용하거나 기존 로또 DB의 Internal URL을 DATABASE_URL에 연결하세요.'}
  if(st.last_error){el.dataset.state='warn';el.innerHTML+=`<br><small>DB 오류: ${escapeText(st.last_error)}</small>`}
 }
 function updateSyncDiagnostics(patch={}){
@@ -373,7 +425,7 @@ async function recoverAccountFromLocal(){
  if(!confirm(`서버의 ${id} 계정기록이 사라진 경우 이 기기의 ${local.length}개 자산자료로 계정을 다시 만들고 서버에 복원합니다. 계속할까요?`))return;
  try{const r=await fetch('/api/account/recover-local',{method:'POST',headers:baseHeaders(),credentials:'include',body:JSON.stringify({account_id:id,password:pw,local_count:local.length})}),d=await r.json();if(d.storage)updateStorageDiagnostics(d.storage);if(!r.ok||!d.ok)throw new Error(d.error||'계정 복구 실패');accountConnected=true;lastAccountErrorCode='';saveSettings();saveAccountSecret();portfolioRows=portfolioMerge(portfolioRows,local);savePortfolioLocalSafe(portfolioRows);renderPortfolio();updateRecoveryButton();const up=await portfolioCloudSave(true,portfolioRows);setAccountStatus(up.verified?`✅ ${id} 계정을 다시 만들고 이 기기 자산 ${portfolioRows.length}개를 서버에 복구했습니다.`:`📱 계정은 복구됐지만 서버 자산 업로드 확인이 필요합니다: ${up.error||''}`,up.verified)}catch(e){setAccountStatus(`계정 복구 실패: ${e.message}`)}
 }
-function exportPortfolioBackup(){const rows=portfolioLocalLoad(true),id=currentAccountId();if(!rows.length){$('portfolioStatus').textContent='백업할 보유/관심종목이 없습니다.';return}const payload={format:'v78-portfolio-backup-v1',version:'V78.8.2',account_id:id,exported_at:new Date().toISOString(),rows};const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`stock-portfolio-${id||'backup'}-${new Date().toISOString().slice(0,10)}.json`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);$('portfolioStatus').textContent=`⬇️ 자산 백업 ${rows.length}개를 저장했습니다. 비밀번호는 백업파일에 포함되지 않습니다.`}
+function exportPortfolioBackup(){const rows=portfolioLocalLoad(true),id=currentAccountId();if(!rows.length){$('portfolioStatus').textContent='백업할 보유/관심종목이 없습니다.';return}const payload={format:'v78-portfolio-backup-v1',version:'V78.9.0',account_id:id,exported_at:new Date().toISOString(),rows};const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`stock-portfolio-${id||'backup'}-${new Date().toISOString().slice(0,10)}.json`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);$('portfolioStatus').textContent=`⬇️ 자산 백업 ${rows.length}개를 저장했습니다. 비밀번호는 백업파일에 포함되지 않습니다.`}
 async function importPortfolioBackupFile(file){if(!file)return;try{const d=JSON.parse(await file.text());if(!d||d.format!=='v78-portfolio-backup-v1'||!Array.isArray(d.rows))throw new Error('지원하지 않는 백업파일입니다.');const current=portfolioLocalLoad(true),merged=portfolioMerge(current,d.rows);if(!confirm(`백업 ${d.rows.length}개를 현재 ${currentAccountId()||'기기'} 자료와 병합할까요? 병합 후 ${merged.length}개가 됩니다.`))return;portfolioRows=merged;savePortfolioLocalSafe(merged);setPending(true);renderPortfolio();updateSyncDiagnostics({localCount:merged.length});if(accountConnected){const up=await portfolioCloudSave(true,merged);$('portfolioStatus').textContent=up.verified?`✅ 백업 복원 + 서버 동기화 완료 · ${merged.length}개`:`📱 백업은 기기에 복원됨 · 서버 동기화 재시도 필요`}else $('portfolioStatus').textContent=`📱 백업 ${merged.length}개를 기기에 복원했습니다. 계정 연결 후 서버로 동기화하세요.`}catch(e){$('portfolioStatus').textContent=`백업 복원 실패: ${e.message}`}}
 function oldSyncKeyFromSettings(){try{for(const k of [SETTINGS_KEY,'v78.3.0-settings','v78.1.0-settings']){const d=JSON.parse(localStorage.getItem(k)||'{}');if(d&&d.syncKey)return String(d.syncKey).trim()}}catch(e){}return''}
 async function importLegacyData(){
