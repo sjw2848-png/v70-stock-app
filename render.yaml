@@ -27,7 +27,7 @@ databases:
     databaseName: v78_stock
     user: v78_stock_user
 
-# V78.12.1 (DATA_DIR removed: the free plan has no persistent disk; PostgreSQL is the durable store)
+# V78.13.0 (DATA_DIR removed: the free plan has no persistent disk; PostgreSQL is the durable store)
 # Blueprint deployment automatically injects the PostgreSQL internal connection string.
 # To reuse an existing lottery PostgreSQL instead, remove the databases/fromDatabase mapping
 # and set the Stock Web Service DATABASE_URL once to that database's Internal URL.

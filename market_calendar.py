@@ -1,4 +1,4 @@
-"""V78.12.1 shared market calendar (KRX / US regular sessions).
+"""V78.13.0 shared market calendar (KRX / US regular sessions).
 
 Single source of truth for holidays, early closes and session phases so the server,
 the analysis engine and the browser (via /health) never disagree about whether a

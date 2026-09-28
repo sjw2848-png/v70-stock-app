@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#07101e" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="V78.12.1 주식판" />
-  <title>V78.12.1 자동 종목리포트 통합판</title>
+  <meta name="apple-mobile-web-app-title" content="V78.13.0 주식판" />
+  <title>V78.13.0 자동 종목리포트 통합판</title>
   <link rel="manifest" href="/static/manifest.json" />
   <link rel="icon" href="/static/icon-192.png" />
   <link rel="apple-touch-icon" href="/static/icon-192.png" />
@@ -16,7 +16,7 @@
 <body>
   <header class="topbar">
     <div class="brand-wrap">
-      <div class="eyebrow">V78.12.1 · 급등주·V78후보·관심주 자동리포트 검증판</div>
+      <div class="eyebrow">V78.13.0 · 급등주·V78후보·관심주 자동리포트 검증판</div>
       <h1>오늘 사도 돼?</h1>
       <p id="connectionText">열자마자 YES · WAIT · NO만 먼저 확인</p>
     </div>
@@ -65,22 +65,25 @@
 
 
     <section class="surge-radar card" id="surgeRadarSection">
-      <div class="section-title-row"><div><b>🚀 오늘의 초급등주 레이더</b><span>당일 상승률·거래대금으로 급등 후보를 찾고, 원하는 종목은 직접 넣어서 바로 분석할 수 있습니다</span></div></div>
-      <div class="surge-controls">
-        <label>시장<select id="surgeMarket"><option value="ALL">코스피+코스닥</option><option value="KOSPI">코스피</option><option value="KOSDAQ">코스닥</option></select></label>
-        <label>최소 상승률 %<input id="surgeMinChange" type="number" value="5" min="0" max="29.99" step="1" /></label>
-        <label>최소 거래대금(억)<input id="surgeMinTurnover" type="number" value="10" min="0" step="10" /></label>
-        <label class="surge-common-toggle"><input id="surgeCommonOnly" type="checkbox" checked /> 보통주 중심<br><small>ETF·ETN·스팩·우선주 제외</small></label>
-        <button id="surgeRefreshBtn" class="primary" type="button">오늘 급등주 검색</button>
+      <div class="section-title-row"><div><b>🚀 오늘의 초급등주 레이더 · 국내/국외</b><span>검색 시점의 시장 상태를 확인해 정규장 종목은 당일 관찰, 닫힌 시장은 최근 정규장 참고용으로 분리합니다</span></div></div>
+      <div id="surgeMarketNow" class="market-now-strip"></div>
+      <div class="surge-controls surge-controls-v13">
+        <label>표시 시장<select id="surgeMarket"><option value="ALL" selected>국내 + 국외(미국)</option><option value="KR">국내 전체</option><option value="KOSPI">국내 KOSPI</option><option value="KOSDAQ">국내 KOSDAQ</option><option value="US">국외(미국) 전체</option><option value="NASDAQ">미국 NASDAQ</option><option value="NYSE">미국 NYSE</option></select></label>
+        <label>최소 상승률 %<input id="surgeMinChange" type="number" value="5" min="0" max="1000" step="1" /></label>
+        <label>국내 최소 거래대금(억)<input id="surgeMinTurnover" type="number" value="10" min="0" step="10" /></label>
+        <label>미국 최소 거래대금($M)<input id="surgeMinTurnoverUs" type="number" value="10" min="0" step="5" /></label>
+        <label class="surge-common-toggle"><input id="surgeCommonOnly" type="checkbox" checked /> 보통주 중심<br><small>ETF·ETN·스팩·우선주·워런트 제외</small></label>
+        <button id="surgeRefreshBtn" class="primary" type="button">국내·국외 급등주 검색</button>
       </div>
       <div class="surge-manual">
-        <input id="surgeManualInput" type="text" autocomplete="off" placeholder="직접 넣기: 종목명 또는 6자리 코드" />
+        <select id="surgeManualMarket" aria-label="직접 추가 시장"><option value="AUTO" selected>시장 자동</option><option value="KR">국내</option><option value="US">미국</option></select>
+        <input id="surgeManualInput" type="text" autocomplete="off" placeholder="직접 넣기: 삼성전자, 005930, NVDA" />
         <button id="surgeManualAddBtn" class="secondary" type="button">+ 레이더에 넣기</button>
         <button id="surgeManualClearBtn" class="ghost" type="button">직접 추가 비우기</button>
       </div>
-      <div id="surgeStatus" class="status compact">기준을 정한 뒤 ‘오늘 급등주 검색’을 누르세요.</div>
-      <div id="surgeList" class="surge-list"></div>
-      <p class="quality-note">자동 목록은 네이버 금융 등락률 페이지를 탐색 원본으로 사용합니다. 장중 시세는 지연될 수 있으며 기본값은 ETF·ETN·스팩·우선주를 제외합니다. <b>급등 = 매수 추천</b>이 아닙니다. ‘분석’ 버튼을 누르면 기존 V78 분석 엔진으로 해당 종목을 다시 확인합니다.</p>
+      <div id="surgeStatus" class="status compact">국내·미국 시장을 함께 확인합니다. 정규장이 닫힌 시장은 참고용으로 표시합니다.</div>
+      <div id="surgeList" class="surge-market-groups"></div>
+      <p class="quality-note">국내는 네이버 금융 구조화 데이터와 레거시 페이지를 교차 fallback하고, 미국은 Yahoo Finance screener를 사용합니다. <b>정규장 거래중</b>인 시장만 당일 관찰로 표시하며 프리/애프터마켓·장마감·휴장은 최근 정규장 <b>참고용</b>입니다. 급등 자체는 매수 근거가 아니므로 종목별 V78 분석을 다시 거칩니다.</p>
     </section>
 
     <section class="live-search card" id="liveSearchSection">
@@ -101,18 +104,19 @@
     </section>
 
     <section class="auto-report card" id="autoReportSection">
-      <div class="section-title-row"><div><b>📑 오늘의 자동 종목 리포트</b><span>급등주 · V78 후보 · 관심종목을 모아 15개 관점, 데이터 완성도, 과열·진입거리 게이트까지 자동 점검합니다</span></div></div>
+      <div class="section-title-row"><div><b>📑 오늘의 자동 종목 리포트 · 국내/국외 종합판</b><span>한국과 미국을 각각 선별한 뒤 시장별 리포트와 전체 요약을 한 화면에서 비교합니다</span></div></div>
+      <div id="reportMarketNow" class="market-now-strip"></div>
       <div class="report-controls">
-        <button id="autoReportBtn" class="primary" type="button">오늘 리포트 자동 생성</button>
+        <button id="autoReportBtn" class="primary" type="button">국내·국외 리포트 자동 생성</button>
         <label><input id="reportIncludeSurge" type="checkbox" checked /> 급등주 포함</label>
         <label><input id="reportIncludeRecommend" type="checkbox" checked /> V78 후보 포함</label>
         <label><input id="reportIncludeWatch" type="checkbox" checked /> 관심주 포함</label>
-        <select id="reportCount" aria-label="리포트 종목 수"><option value="4">핵심 4종목</option><option value="6" selected>핵심 6종목</option><option value="8">핵심 8종목</option></select>
+        <select id="reportCount" aria-label="시장별 리포트 종목 수"><option value="3">시장별 핵심 3종목</option><option value="4" selected>시장별 핵심 4종목</option><option value="5">시장별 핵심 5종목</option><option value="6">시장별 핵심 6종목</option></select>
       </div>
-      <div id="autoReportStatus" class="status compact">최신 분석이나 급등주 검색을 실행하면 리포트도 자동으로 갱신됩니다. 바로 만들려면 ‘오늘 리포트 자동 생성’을 누르세요.</div>
-      <div id="autoReportSummary" class="report-summary"></div>
-      <div id="autoReportList" class="auto-report-list"></div>
-      <p class="quality-note">리포트는 기술지표·거래량·손익비·실적·최근 뉴스 제목을 결합한 <b>의사결정 보조정보</b>입니다. 검토점수는 수익확률이 아니며 근거 완성도를 별도로 표시합니다. 급등 자체를 매수 근거로 쓰지 않고, 결측값은 ‘확인 불가’로 남기며 주문은 자동 실행하지 않습니다.</p>
+      <div id="autoReportStatus" class="status compact">한국·미국을 각각 선별합니다. 열린 시장은 현재장 기준, 닫힌 시장은 참고용으로 계속 표시합니다.</div>
+      <div id="autoReportSummary" class="report-summary report-summary-v13"></div>
+      <div id="autoReportList" class="auto-report-market-list"></div>
+      <p class="quality-note">각 시장은 독립적으로 후보를 선별합니다. 장이 닫혀 있어도 후보를 숨기지 않고 <b>참고용</b>으로 남기며, 실제 진입 판단은 해당 시장 정규장 개장 후 가격·거래량·갭을 다시 확인해야 합니다. 검토점수는 수익확률이 아니고 주문은 자동 실행하지 않습니다.</p>
     </section>
 
     <section class="prompt-center card" id="promptCenterSection">
@@ -277,7 +281,7 @@
     </section>
 
     <section class="performance-section card" id="feedbackSection">
-      <div class="section-title-row"><div><b>🧠 V78.12.1 시장확산·적응형 후보·성과 피드백 엔진</b><span>D+5 실제 관찰결과를 전략·시장국면·추천유형별로 분해하고 추정확률의 보정오차를 확인합니다</span></div></div>
+      <div class="section-title-row"><div><b>🧠 V78.13.0 시장확산·적응형 후보·성과 피드백 엔진</b><span>D+5 실제 관찰결과를 전략·시장국면·추천유형별로 분해하고 추정확률의 보정오차를 확인합니다</span></div></div>
       <div id="feedbackEngine"><div class="quality-empty">D+5 완료 기록이 쌓이면 자동 분석합니다.</div></div>
       <p class="quality-note">※ 브라우저 로컬 기록 기반 감사 기능입니다. 미래 성과를 보장하거나 자동으로 공격성을 높이지 않습니다.</p>
     </section>

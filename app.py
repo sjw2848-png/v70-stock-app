@@ -13,12 +13,13 @@ from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, render_template, request, g
 import re
 import requests
+import yfinance as yf
 from lxml import html as lxml_html
 from state_store import StateStore, StorageUnavailable
 from engine import analyze, analyze_search, search_instruments, fetch_fundamentals, fetch_recent_issues
 import market_calendar
 
-APP_VERSION = 'V78.12.1'
+APP_VERSION = 'V78.13.0'
 app = Flask(__name__)
 
 _cache_lock = threading.Lock()
@@ -307,7 +308,7 @@ def home():
 
 @app.after_request
 def _shell_cache_headers(response):
-    # V78.12.1: PWA shell must revalidate on every deploy so old app.js does not linger.
+    # V78.13.0: PWA shell must revalidate on every deploy so old app.js does not linger.
     if request.path in ('/', '/static/app.js', '/static/sw.js', '/static/manifest.json'):
         response.headers['Cache-Control'] = 'no-cache, max-age=0, must-revalidate'
         response.headers['Pragma'] = 'no-cache'
@@ -479,11 +480,97 @@ def _to_number(text, default=0.0):
         return default
 
 
-def _fetch_naver_risers(sosok: int, limit: int = 40):
-    """Fetch KOSPI/KOSDAQ top risers from Naver Finance.
+def _find_stock_rows(payload):
+    """Best-effort extractor for Naver mobile JSON list responses.
 
-    This is a display/discovery source only. The app still re-runs its own per-symbol
-    analysis before showing any trading signal. Naver quotes can be delayed.
+    Naver's public mobile payload keys have changed over time.  Prefer a list whose
+    rows look like stocks instead of binding the app to one undocumented key.
+    """
+    candidates = []
+    def walk(v, depth=0):
+        if depth > 5:
+            return
+        if isinstance(v, list):
+            if v and isinstance(v[0], dict):
+                score = sum(1 for row in v[:5] if any(k in row for k in (
+                    'itemCode','stockCode','symbolCode','reutersCode','stockName','name','closePrice','currentPrice','fluctuationsRatio'
+                )))
+                if score:
+                    candidates.append((score, v))
+            for x in v[:5]:
+                if isinstance(x, (dict, list)):
+                    walk(x, depth + 1)
+        elif isinstance(v, dict):
+            for x in v.values():
+                if isinstance(x, (dict, list)):
+                    walk(x, depth + 1)
+    walk(payload)
+    if not candidates:
+        return []
+    candidates.sort(key=lambda z: (z[0], len(z[1])), reverse=True)
+    return candidates[0][1]
+
+
+def _fetch_naver_mobile_risers(category: str, limit: int = 60):
+    """Structured Naver mobile top-risers feed, with tolerant field parsing."""
+    category = 'KOSDAQ' if str(category).upper() == 'KOSDAQ' else 'KOSPI'
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/123 Safari/537.36',
+        'Referer': 'https://m.stock.naver.com/'
+    }
+    urls = [
+        'https://m.stock.naver.com/front-api/stock/domestic/stockList',
+        'https://m.stock.naver.com/api/stock/domestic/stockList',
+    ]
+    last_error = None
+    for url in urls:
+        try:
+            resp = requests.get(url, params={'sortType':'up','category':category,'page':1,'pageSize':max(30,min(int(limit),100))}, headers=headers, timeout=8)
+            resp.raise_for_status()
+            data = resp.json()
+            rows = _find_stock_rows(data)
+            out = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                code = str(row.get('itemCode') or row.get('stockCode') or row.get('symbolCode') or row.get('reutersCode') or '').strip().upper()
+                m = re.search(r'(\d{6})', code)
+                code = m.group(1) if m else code
+                if not re.fullmatch(r'\d{6}', code):
+                    continue
+                name = str(row.get('stockName') or row.get('name') or row.get('itemName') or row.get('shortName') or code).strip()
+                price = int(_to_number(row.get('closePrice') or row.get('currentPrice') or row.get('price'), 0))
+                change_pct = _to_number(row.get('fluctuationsRatio') or row.get('changeRate') or row.get('change_pct'), 0)
+                volume = int(_to_number(row.get('accumulatedTradingVolume') or row.get('tradingVolume') or row.get('volume'), 0))
+                turnover = int(_to_number(row.get('accumulatedTradingValue') or row.get('tradingValue') or row.get('turnover'), 0))
+                if turnover <= 0 and price > 0 and volume > 0:
+                    turnover = int(price * volume)
+                traded_at = str(row.get('localTradedAt') or row.get('lastUpdatedAt') or row.get('tradeTime') or '')
+                out.append({
+                    'code': code, 'name': name or code, 'market': 'KR', 'region': 'KR',
+                    'exchange': category, 'price': price, 'currency': 'KRW',
+                    'change_pct': round(change_pct, 2), 'volume': volume,
+                    'turnover_krw': turnover, 'turnover_usd': 0,
+                    'traded_at': traded_at, 'source': 'Naver Finance Mobile JSON',
+                    'instrument_type': '주식',
+                })
+                if len(out) >= max(10, min(int(limit), 100)):
+                    break
+            if out:
+                return out
+            last_error = RuntimeError('Naver mobile JSON returned no stock rows')
+        except Exception as e:
+            last_error = e
+    if last_error:
+        raise last_error
+    return []
+
+
+def _fetch_naver_legacy_risers(sosok: int, limit: int = 40):
+    """Legacy HTML fallback for KOSPI/KOSDAQ risers.
+
+    Turnover is derived from price × volume.  The old build interpreted one of
+    Naver's order-book quantity columns as 거래대금, which could silently break filters.
     """
     url = f'https://finance.naver.com/sise/sise_rise.naver?sosok={int(sosok)}'
     headers = {
@@ -492,7 +579,6 @@ def _fetch_naver_risers(sosok: int, limit: int = 40):
     }
     resp = requests.get(url, headers=headers, timeout=8)
     resp.raise_for_status()
-    # Naver Finance legacy pages are commonly EUC-KR encoded.
     if not resp.encoding or str(resp.encoding).lower() in {'iso-8859-1', 'ascii'}:
         resp.encoding = resp.apparent_encoding or 'euc-kr'
     tree = lxml_html.fromstring(resp.text)
@@ -503,8 +589,7 @@ def _fetch_naver_risers(sosok: int, limit: int = 40):
         if not anchors:
             continue
         a = anchors[0]
-        href = a.get('href') or ''
-        m = re.search(r'code=(\d{6})', href)
+        m = re.search(r'code=(\d{6})', a.get('href') or '')
         if not m:
             continue
         code = m.group(1)
@@ -512,41 +597,45 @@ def _fetch_naver_risers(sosok: int, limit: int = 40):
         cells = [' '.join(''.join(td.itertext()).split()) for td in tr.xpath('./td')]
         if len(cells) < 6:
             continue
-        price = int(_to_number(cells[2], 0)) if len(cells) > 2 else 0
-        change_pct = _to_number(cells[4], 0) if len(cells) > 4 else 0.0
-        volume = int(_to_number(cells[5], 0)) if len(cells) > 5 else 0
-        # Naver's 거래대금 column is normally displayed in 백만원. If layout changes,
-        # fall back to current price × volume as an approximate turnover.
-        turnover = 0
-        if len(cells) > 8:
-            turnover = int(_to_number(cells[8], 0) * 1_000_000)
-        if turnover <= 0 and price > 0 and volume > 0:
-            turnover = int(price * volume)
+        price = int(_to_number(cells[2], 0))
+        change_pct = _to_number(cells[4], 0)
+        volume = int(_to_number(cells[5], 0))
+        turnover = int(price * volume) if price > 0 and volume > 0 else 0
         out.append({
-            'code': code,
-            'name': name or code,
-            'market': 'KR',
-            'exchange': market_name,
-            'price': price,
-            'change_pct': round(change_pct, 2),
-            'volume': volume,
-            'turnover_krw': turnover,
-            'source': 'Naver Finance',
+            'code': code, 'name': name or code, 'market': 'KR', 'region': 'KR',
+            'exchange': market_name, 'price': price, 'currency': 'KRW',
+            'change_pct': round(change_pct, 2), 'volume': volume,
+            'turnover_krw': turnover, 'turnover_usd': 0,
+            'traded_at': '', 'source': 'Naver Finance Legacy HTML', 'instrument_type': '주식',
         })
         if len(out) >= max(10, min(int(limit), 80)):
             break
     return out
 
 
-def _is_common_surge_candidate(name):
-    """Remove products/special-purpose names from the default surge discovery lane.
+def _fetch_naver_risers(sosok: int, limit: int = 60):
+    category = 'KOSPI' if int(sosok) == 0 else 'KOSDAQ'
+    try:
+        rows = _fetch_naver_mobile_risers(category, limit)
+        if rows:
+            return rows
+    except Exception:
+        pass
+    return _fetch_naver_legacy_risers(sosok, limit)
 
-    This is only a discovery filter, not a statement about investment quality. Users can turn it
-    off from the UI when they deliberately want preferred shares, SPACs, ETFs or ETNs included.
-    """
+
+def _is_common_surge_candidate(name, market='KR', instrument_type=''):
+    """Exclude funds, preferreds and special-purpose securities from the default lane."""
     n = re.sub(r'\s+', '', str(name or '')).upper()
+    typ = str(instrument_type or '').upper()
     if not n:
         return False
+    if str(market).upper() == 'US':
+        if typ and typ not in {'EQUITY','STOCK','주식'}:
+            return False
+        if any(tok in n for tok in ('ETF', 'ETN', 'WARRANT', 'RIGHT', 'DEPOSITARY', 'ACQUISITIONCORP', 'UNITS')):
+            return False
+        return True
     if any(tok in n for tok in ('ETF', 'ETN', '스팩', 'SPAC', '인버스', '레버리지')):
         return False
     if re.search(r'(?:\d?우(?:B|C)?|우)$', n):
@@ -554,16 +643,107 @@ def _is_common_surge_candidate(name):
     return True
 
 
+def _yahoo_quote_num(row, *keys):
+    for key in keys:
+        v = row.get(key) if isinstance(row, dict) else None
+        if isinstance(v, dict):
+            v = v.get('raw', v.get('fmt'))
+        if v not in (None, ''):
+            n = _to_number(v, None)
+            if n is not None:
+                return n
+    return 0.0
+
+
+def _fetch_yahoo_us_risers(limit: int = 80):
+    """US all-cap gainers from Yahoo/yfinance.
+
+    Custom screen keeps small/mid caps eligible; predefined day_gainers is the fallback
+    if Yahoo changes the custom screener contract.
+    """
+    count = max(25, min(int(limit), 200))
+    errors = []
+    response = None
+    try:
+        from yfinance import EquityQuery
+        query = EquityQuery('and', [
+            EquityQuery('eq', ['region', 'us']),
+            EquityQuery('gt', ['percentchange', 2]),
+            EquityQuery('gt', ['intradayprice', 1]),
+            EquityQuery('gt', ['dayvolume', 20000]),
+        ])
+        response = yf.screen(query, size=count, sortField='percentchange', sortAsc=False)
+    except Exception as e:
+        errors.append(f'custom:{type(e).__name__}')
+    quotes = ((response or {}).get('quotes') or []) if isinstance(response, dict) else []
+    if not quotes:
+        try:
+            response = yf.screen('day_gainers', count=count)
+            quotes = ((response or {}).get('quotes') or []) if isinstance(response, dict) else []
+        except Exception as e:
+            errors.append(f'predefined:{type(e).__name__}')
+    if not quotes:
+        # Last fallback: Yahoo's predefined screener endpoint.  It may be unavailable on
+        # some hosts; failures are surfaced to the UI instead of returning a false empty list.
+        try:
+            u = 'https://query2.finance.yahoo.com/v1/finance/screener/predefined/saved'
+            r = requests.get(u, params={'formatted':'false','lang':'en-US','region':'US','scrIds':'day_gainers','count':count,'corsDomain':'finance.yahoo.com'}, headers={'User-Agent':'Mozilla/5.0'}, timeout=8)
+            r.raise_for_status()
+            root = r.json().get('finance', {}).get('result', [])
+            quotes = root[0].get('quotes', []) if root else []
+        except Exception as e:
+            errors.append(f'http:{type(e).__name__}')
+    if not quotes:
+        raise RuntimeError('Yahoo US gainers unavailable' + (f" ({', '.join(errors)})" if errors else ''))
+    out = []
+    for row in quotes:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get('symbol') or '').strip().upper()
+        if not symbol or len(symbol) > 12:
+            continue
+        name = str(row.get('shortName') or row.get('longName') or row.get('displayName') or symbol).strip()
+        exchange = str(row.get('fullExchangeName') or row.get('exchange') or '').strip().upper()
+        qtype = str(row.get('quoteType') or row.get('typeDisp') or 'EQUITY').strip().upper()
+        price = _yahoo_quote_num(row, 'regularMarketPrice', 'intradayprice')
+        change_pct = _yahoo_quote_num(row, 'regularMarketChangePercent', 'percentchange')
+        volume = int(_yahoo_quote_num(row, 'regularMarketVolume', 'dayvolume'))
+        turnover_usd = float(price * volume) if price > 0 and volume > 0 else 0.0
+        epoch = int(_yahoo_quote_num(row, 'regularMarketTime'))
+        traded_at = datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat() if epoch > 0 else ''
+        out.append({
+            'code': symbol, 'name': name or symbol, 'market': 'US', 'region': 'US',
+            'exchange': exchange or 'US', 'price': round(float(price), 4), 'currency': 'USD',
+            'change_pct': round(float(change_pct), 2), 'volume': volume,
+            'turnover_krw': 0, 'turnover_usd': round(turnover_usd, 2),
+            'market_cap_usd': _yahoo_quote_num(row, 'marketCap', 'intradaymarketcap'),
+            'traded_at': traded_at, 'source': 'Yahoo Finance Screener', 'instrument_type': qtype,
+        })
+    out.sort(key=lambda x: (x['change_pct'], x['turnover_usd']), reverse=True)
+    return out[:count]
+
+
+def _market_display_meta(market):
+    s = _market_session(market)
+    if s.get('open'):
+        mode, label, ref = 'LIVE', '정규장 기준', False
+    elif s.get('extended_open'):
+        mode, label, ref = 'EXTENDED_REFERENCE', f"{s.get('label','연장거래')} · 정규장 기준 참고", True
+    else:
+        mode, label, ref = 'REFERENCE', f"{s.get('label','휴장')} · 최근 정규장 참고", True
+    return {**s, 'display_mode': mode, 'display_label': label, 'reference_only': ref}
+
+
 @app.get('/api/surge-stocks')
 def api_surge_stocks():
     if not _authorized():
         return jsonify({'ok': False, 'error': '접속 PIN이 올바르지 않습니다.', 'code': 'PIN_REQUIRED'}), 401
     market = str(request.args.get('market', 'ALL')).upper()
-    if market not in {'ALL','KOSPI','KOSDAQ'}:
+    if market not in {'ALL','KR','KOSPI','KOSDAQ','US','NASDAQ','NYSE'}:
         market = 'ALL'
     common_only = str(request.args.get('common_only', '1')).lower() not in {'0','false','no'}
     try:
-        min_change = max(0.0, min(float(request.args.get('min_change', 5)), 29.99))
+        min_change = max(0.0, min(float(request.args.get('min_change', 5)), 1000))
     except (TypeError, ValueError):
         min_change = 5.0
     try:
@@ -571,53 +751,132 @@ def api_surge_stocks():
     except (TypeError, ValueError):
         min_turnover_eok = 10.0
     try:
-        limit = max(5, min(int(request.args.get('limit', 30)), 60))
+        min_turnover_usd_m = max(0.0, min(float(request.args.get('min_turnover_usd_m', 10)), 100000))
+    except (TypeError, ValueError):
+        min_turnover_usd_m = 10.0
+    try:
+        limit = max(5, min(int(request.args.get('limit', 30)), 80))
     except (TypeError, ValueError):
         limit = 30
 
-    key = f'{market}:{min_change:.2f}:{min_turnover_eok:.2f}:{limit}:{int(common_only)}'
+    key = f'{market}:{min_change:.2f}:{min_turnover_eok:.2f}:{min_turnover_usd_m:.2f}:{limit}:{int(common_only)}'
     now = time.time()
     cached = _surge_cache.get(key)
     if cached and now - cached['ts'] < 45:
         return jsonify({'ok': True, **cached['data'], 'cache_hit': True, 'version': APP_VERSION})
 
-    try:
-        raw = []
-        if market in {'ALL', 'KOSPI'}:
-            raw.extend(_fetch_naver_risers(0, max(limit, 30)))
-        if market in {'ALL', 'KOSDAQ'}:
-            raw.extend(_fetch_naver_risers(1, max(limit, 30)))
-        min_turnover = min_turnover_eok * 100_000_000
-        seen = set(); items = []
-        for x in raw:
+    errors = []
+    raw_kr, raw_us = [], []
+    want_kr = market in {'ALL','KR','KOSPI','KOSDAQ'}
+    want_us = market in {'ALL','US','NASDAQ','NYSE'}
+    if want_kr:
+        try:
+            if market in {'ALL','KR','KOSPI'}:
+                raw_kr.extend(_fetch_naver_risers(0, max(limit * 2, 50)))
+            if market in {'ALL','KR','KOSDAQ'}:
+                raw_kr.extend(_fetch_naver_risers(1, max(limit * 2, 50)))
+        except Exception as e:
+            errors.append(f'국내 급등원본: {str(e)[:160]}')
+    if want_us:
+        try:
+            raw_us = _fetch_yahoo_us_risers(max(limit * 3, 80))
+        except Exception as e:
+            errors.append(f'미국 급등원본: {str(e)[:160]}')
+
+    groups = {'KR': [], 'US': []}
+    if want_kr:
+        seen = set(); min_turnover = min_turnover_eok * 100_000_000
+        for x in raw_kr:
             code = str(x.get('code') or '')
             if not code or code in seen:
                 continue
             seen.add(code)
             if float(x.get('change_pct') or 0) < min_change or int(x.get('turnover_krw') or 0) < min_turnover:
                 continue
-            if common_only and not _is_common_surge_candidate(x.get('name')):
+            if common_only and not _is_common_surge_candidate(x.get('name'), 'KR', x.get('instrument_type')):
                 continue
-            row = dict(x)
-            row['discovery_only'] = True
-            items.append(row)
-        items.sort(key=lambda x: (float(x.get('change_pct') or 0), int(x.get('turnover_krw') or 0)), reverse=True)
-        items = items[:limit]
-        payload = {
-            'items': items,
-            'generated_at': _now_iso(),
-            'market_session': _market_session('KR'),
-            'filters': {'market': market, 'min_change_pct': min_change, 'min_turnover_eok': min_turnover_eok, 'limit': limit,
-                        'common_only': common_only},
-            'source_note': '네이버 금융 등락률 페이지 기반 탐색값입니다. 장중 시세는 지연될 수 있고, 장 마감·휴장 시 최근 거래일 값일 수 있으며 기술분석 가격과 시점이 다를 수 있습니다. 급등 자체는 자동매수 신호가 아닙니다.'
-        }
-        _surge_cache[key] = {'ts': now, 'data': payload}
-        if len(_surge_cache) > 30:
-            for k, _ in sorted(_surge_cache.items(), key=lambda kv: kv[1]['ts'])[:10]:
-                _surge_cache.pop(k, None)
-        return jsonify({'ok': True, **payload, 'cache_hit': False, 'version': APP_VERSION})
-    except Exception as e:
-        return jsonify({'ok': False, 'error': f'급등주 원본 조회 실패: {str(e)[:220]}', 'items': [], 'version': APP_VERSION}), 502
+            row = dict(x); row['discovery_only'] = True; row['reference_only'] = _market_display_meta('KR')['reference_only']
+            groups['KR'].append(row)
+        groups['KR'].sort(key=lambda x: (float(x.get('change_pct') or 0), int(x.get('turnover_krw') or 0)), reverse=True)
+        groups['KR'] = groups['KR'][:limit]
+    if want_us:
+        min_us = min_turnover_usd_m * 1_000_000
+        seen = set()
+        for x in raw_us:
+            code = str(x.get('code') or '').upper()
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            ex = str(x.get('exchange') or '').upper()
+            if market == 'NASDAQ' and not any(t in ex for t in ('NASDAQ','NMS','NGM','NCM')):
+                continue
+            if market == 'NYSE' and not any(t in ex for t in ('NYSE','NYQ')):
+                continue
+            if float(x.get('change_pct') or 0) < min_change or float(x.get('turnover_usd') or 0) < min_us:
+                continue
+            if common_only and not _is_common_surge_candidate(x.get('name'), 'US', x.get('instrument_type')):
+                continue
+            row = dict(x); row['discovery_only'] = True; row['reference_only'] = _market_display_meta('US')['reference_only']
+            groups['US'].append(row)
+        groups['US'].sort(key=lambda x: (float(x.get('change_pct') or 0), float(x.get('turnover_usd') or 0)), reverse=True)
+        groups['US'] = groups['US'][:limit]
+
+    # When strict filters produce zero rows but the upstream source is healthy, keep a small
+    # near-filter lane for the UI.  These rows are *not* put in `items`, so they do not become
+    # automatic report candidates merely because the strict radar is empty.
+    fallback_groups = {'KR': [], 'US': []}
+    if want_kr and not groups['KR'] and raw_kr:
+        seen = set(); candidates = []
+        for x in raw_kr:
+            code = str(x.get('code') or '')
+            if not code or code in seen or float(x.get('change_pct') or 0) <= 0:
+                continue
+            seen.add(code)
+            if common_only and not _is_common_surge_candidate(x.get('name'), 'KR', x.get('instrument_type')):
+                continue
+            row = dict(x); row['below_filter'] = True; row['discovery_only'] = True
+            row['reference_only'] = _market_display_meta('KR')['reference_only']
+            candidates.append(row)
+        candidates.sort(key=lambda x: (float(x.get('change_pct') or 0), int(x.get('turnover_krw') or 0)), reverse=True)
+        fallback_groups['KR'] = candidates[:5]
+    if want_us and not groups['US'] and raw_us:
+        seen = set(); candidates = []
+        for x in raw_us:
+            code = str(x.get('code') or '').upper()
+            if not code or code in seen or float(x.get('change_pct') or 0) <= 0:
+                continue
+            seen.add(code)
+            ex = str(x.get('exchange') or '').upper()
+            if market == 'NASDAQ' and not any(t in ex for t in ('NASDAQ','NMS','NGM','NCM')):
+                continue
+            if market == 'NYSE' and not any(t in ex for t in ('NYSE','NYQ')):
+                continue
+            if common_only and not _is_common_surge_candidate(x.get('name'), 'US', x.get('instrument_type')):
+                continue
+            row = dict(x); row['below_filter'] = True; row['discovery_only'] = True
+            row['reference_only'] = _market_display_meta('US')['reference_only']
+            candidates.append(row)
+        candidates.sort(key=lambda x: (float(x.get('change_pct') or 0), float(x.get('turnover_usd') or 0)), reverse=True)
+        fallback_groups['US'] = candidates[:5]
+
+    sessions = {'KR': _market_display_meta('KR'), 'US': _market_display_meta('US')}
+    items = groups['KR'] + groups['US']
+    payload = {
+        'items': items, 'groups': groups, 'fallback_groups': fallback_groups, 'generated_at': _now_iso(), 'sessions': sessions,
+        'market_session': sessions['US'] if market in {'US','NASDAQ','NYSE'} else sessions['KR'],
+        'filters': {'market': market, 'min_change_pct': min_change, 'min_turnover_eok': min_turnover_eok,
+                    'min_turnover_usd_m': min_turnover_usd_m, 'limit': limit, 'common_only': common_only},
+        'source_status': {'KR_raw': len(raw_kr), 'US_raw': len(raw_us), 'KR_filtered': len(groups['KR']), 'US_filtered': len(groups['US']), 'KR_near': len(fallback_groups['KR']), 'US_near': len(fallback_groups['US'])},
+        'errors': errors,
+        'source_note': '국내는 네이버 금융 모바일 JSON→레거시 HTML 순으로, 미국은 Yahoo Finance screener를 사용합니다. 정규장이 닫혀 있으면 최근 정규장 데이터를 참고용으로 표시합니다. 급등 자체는 자동매수 신호가 아닙니다.'
+    }
+    if not items and errors and (not raw_kr and not raw_us):
+        return jsonify({'ok': False, 'error': ' / '.join(errors), **payload, 'version': APP_VERSION}), 502
+    _surge_cache[key] = {'ts': now, 'data': payload}
+    if len(_surge_cache) > 40:
+        for k, _ in sorted(_surge_cache.items(), key=lambda kv: kv[1]['ts'])[:12]:
+            _surge_cache.pop(k, None)
+    return jsonify({'ok': True, **payload, 'cache_hit': False, 'version': APP_VERSION})
 
 
 @app.get('/api/symbols')
